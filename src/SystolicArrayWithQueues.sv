@@ -121,10 +121,9 @@ module NorthInputQueue #(
     output logic queue_empty_o
 );
 
-    SystolicInputQueue #(
+    RowInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
-        // .SRAM_DEPTH(N * N),
         .MEM_FILE(MEM_FILE)
     ) north_queue_inst (
         .clk_i(clk_i),
@@ -153,10 +152,9 @@ module WestInputQueue #(
     output logic queue_empty_o
 );
 
-    SystolicInputQueue #(
+    ColumnInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
-        // .SRAM_DEPTH(N * N),
         .MEM_FILE(MEM_FILE)
     ) west_queue_inst (
         .clk_i(clk_i),

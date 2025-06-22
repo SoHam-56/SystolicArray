@@ -1,6 +1,6 @@
 `timescale 1ns / 100ps
 
-module SystolicInputQueue #(
+module RowInputQueue #(
     parameter N = 8,                    // Systolic array dimension
     parameter DATA_WIDTH = 32,          // Data width
     parameter MEM_FILE = "default.mem"  // Memory initialization file

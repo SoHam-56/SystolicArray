@@ -12,7 +12,8 @@ WAVE = surfer
 # Design Files for SA Array
 DESIGN_FILES = \
 	SystolicArrayWithQueues.sv \
-	SystolicInputQueue.sv \
+	RowInputQueue.sv \
+	ColumnInputQueue.sv \
 	SystolicArray.sv \
 	ProcessingElement.sv \
 	Adder_FP32.sv \
