@@ -97,7 +97,7 @@ vcs:
 wave:
 	@if [ -f $(VERILATOR_DIR)/$(TOP_MODULE).vcd ]; then \
 		echo "-- Opening WAVE"; \
-		$(WAVE) $(VERILATOR_DIR)/$(TOP_MODULE).vcd --vcd; \
+		$(WAVE) $(VERILATOR_DIR)/$(TOP_MODULE).vcd \
 	else \
 		echo "-- No waveform dumps found"; \
 	fi
