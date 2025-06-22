@@ -7,7 +7,7 @@ TB_DIR = $(PRJ_DIR)/testbenches
 VERILATOR = verilator
 VCS = vcs
 VVP = vvp
-GTKWAVE = gtkwave
+WAVE = surfer
 
 # Design Files for SA Array
 DESIGN_FILES = \
@@ -96,8 +96,8 @@ vcs:
 # View Verilator Waveform
 wave:
 	@if [ -f $(VERILATOR_DIR)/$(TOP_MODULE).vcd ]; then \
-		echo "-- Opening gtkwave"; \
-		$(GTKWAVE) $(VERILATOR_DIR)/$(TOP_MODULE).vcd --vcd; \
+		echo "-- Opening WAVE"; \
+		$(WAVE) $(VERILATOR_DIR)/$(TOP_MODULE).vcd --vcd; \
 	else \
 		echo "-- No waveform dumps found"; \
 	fi
