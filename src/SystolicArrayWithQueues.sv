@@ -121,7 +121,7 @@ module NorthInputQueue #(
     output logic queue_empty_o
 );
 
-    RowInputQueue #(
+    ColumnInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
         .MEM_FILE(MEM_FILE)
@@ -152,7 +152,7 @@ module WestInputQueue #(
     output logic queue_empty_o
 );
 
-    ColumnInputQueue #(
+    RowInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
         .MEM_FILE(MEM_FILE)

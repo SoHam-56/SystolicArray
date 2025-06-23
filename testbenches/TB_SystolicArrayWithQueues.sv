@@ -110,8 +110,8 @@ module TB_SystolicArrayWithQueues;
     SystolicArrayWithQueues #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
-        .WEIGHT("weights.mem"),
-        .DATA("data.mem")
+        .WEIGHT("data.mem"),
+        .DATA("weights.mem")
     ) dut_random (
         .clk_i(clk),
         .rstn_i(rstn),
