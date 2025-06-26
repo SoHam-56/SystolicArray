@@ -1,113 +1,158 @@
 `timescale 1ns / 100ps
 
 module SystolicArray #(
-    parameter N = 2,                    // Array size (NxN)
-    parameter DATA_WIDTH = 32           // Data width for each PE
-)(
-    input wire clk_i,
-    input wire rstn_i,
+    parameter N = 8,
+    parameter DATA_WIDTH = 32,
+    parameter ROWS = "rows.mem",
+    parameter COLS = "cols.mem"
+) (
+    input logic clk_i,
+    input logic rstn_i,
+    input logic start_matrix_mult_i,
 
-    // Data inputs (top row - North boundary)
-    input wire [DATA_WIDTH-1:0] north_i [0:N-1],
+    // Outputs from systolic array
+    output logic [DATA_WIDTH-1:0] south_o [0:N-1],
+    output logic [DATA_WIDTH-1:0] east_o [0:N-1],
+    output logic passthrough_valid_o [0:N-1][0:N-1],
+    output logic accumulator_valid_o [0:N-1][0:N-1],
 
-    // Weight inputs (left column - West boundary)
-    input wire [DATA_WIDTH-1:0] west_i [0:N-1],
-
-    // Control inputs
-    input wire inputs_valid_i,                    // Single input valid for top-left PE
-    input wire select_accumulator_i [0:N-1][0:N-1],  // Individual accumulator select for each PE
-
-    // Data outputs (bottom row - South boundary)
-    output wire [DATA_WIDTH-1:0] south_o [0:N-1],
-
-    // Weight outputs (right column - East boundary)
-    output wire [DATA_WIDTH-1:0] east_o [0:N-1],
-
-    // Status outputs for each PE
-    output wire passthrough_valid_o [0:N-1][0:N-1],
-    output wire accumulator_valid_o [0:N-1][0:N-1]
+    // Queue status
+    output logic north_queue_empty_o,
+    output logic west_queue_empty_o,
+    output logic matrix_mult_complete_o
 );
 
-    // Internal connection wires
-    // Data connections (North-South flow) - Fixed: needs N+1 rows for N PEs
-    wire [DATA_WIDTH-1:0] weight_connections [0:N][0:N-1];
+    // Internal signals
+    logic [DATA_WIDTH-1:0] weight_in_north [0:N-1];
+    logic [DATA_WIDTH-1:0] data_in_west [0:N-1];
+    logic inputs_valid;
+    logic select_accumulator [0:N-1][0:N-1];
 
-    // Weight connections (West-East flow) - Fixed: needs N+1 columns for N PEs
-    wire [DATA_WIDTH-1:0] data_connections [0:N-1][0:N];
+    // Extract edge passthrough_valid signals
+    logic [N-1:0] top_edge_passthrough_valid;
+    logic [N-1:0] left_edge_passthrough_valid;
 
-    // Valid signal connections (follow the systolic flow pattern)
-    wire inputs_valid_internal [0:N-1][0:N-1];
-
-    // Generate PE array with systematic connections
-    genvar row, col;
-    generate
-        for (row = 0; row < N; row = row + 1) begin : gen_row
-            for (col = 0; col < N; col = col + 1) begin : gen_col
-                ProcessingElement #(
-                    .DATA_WIDTH(DATA_WIDTH)
-                ) pe_inst (
-                    .clk_i(clk_i),
-                    .rstn_i(rstn_i),
-                    // North input
-                    .north_i(weight_connections[row][col]),
-                    // West input
-                    .west_i(data_connections[row][col]),
-                    // Control inputs
-                    .inputs_valid(inputs_valid_internal[row][col]),
-                    .select_accumulator(select_accumulator_i[row][col]),
-                    // South output
-                    .south_o(weight_connections[row+1][col]),
-                    // East output
-                    .east_o(data_connections[row][col+1]),
-                    // Status outputs
-                    .passthrough_valid(passthrough_valid_o[row][col]),
-                    .accumulator_valid(accumulator_valid_o[row][col])
-                );
-            end
+    
+    always_comb begin
+        for (int i = 0; i < N; i++) begin
+            top_edge_passthrough_valid[i] = passthrough_valid_o[0][i];  // Extract top edge (row 0) passthrough_valid
+            left_edge_passthrough_valid[i] = passthrough_valid_o[i][0]; // Extract left edge (column 0) passthrough_valid
         end
-    endgenerate
+    end
 
-    // Connect boundary inputs and outputs
-    generate
-        for (col = 0; col < N; col = col + 1) begin : gen_weight_boundary
-            // Top boundary: Connect external weight inputs to first row
-            assign weight_connections[0][col] = north_i[col];
 
-            // Bottom boundary: Connect last row outputs to external outputs
-            assign south_o[col] = weight_connections[N][col];
-        end
+    NorthInputQueue #(
+        .N(N),
+        .DATA_WIDTH(DATA_WIDTH),
+        .MEM_FILE(ROWS)
+    ) north_queue (
+        .clk_i(clk_i),
+        .rstn_i(rstn_i),
+        .start_i(start_matrix_mult_i),
+        .top_edge_passthrough_valid_i(top_edge_passthrough_valid),
+        .weight_out_north(weight_in_north),
+        .inputs_valid_o(inputs_valid),
+        .queue_empty_o(north_queue_empty_o)
+    );
 
-        for (row = 0; row < N; row = row + 1) begin : gen_data_boundary
-            // Left boundary: Connect external data inputs to first column
-            assign data_connections[row][0] = west_i[row];
+    WestInputQueue #(
+        .N(N),
+        .DATA_WIDTH(DATA_WIDTH),
+        .MEM_FILE(COLS)
+    ) west_queue (
+        .clk_i(clk_i),
+        .rstn_i(rstn_i),
+        .start_i(start_matrix_mult_i),
+        .left_edge_passthrough_valid_i(left_edge_passthrough_valid),
+        .data_out_west(data_in_west),
+        .queue_empty_o(west_queue_empty_o)
+    );
 
-            // Right boundary: Connect last column outputs to external outputs
-            assign east_o[row] = data_connections[row][N];
-        end
-    endgenerate
+    // Set all accumulator selects to 0 for now (you can control this as needed)
+    always_comb begin
+        for (int i = 0; i < N; i++)
+            for (int j = 0; j < N; j++) select_accumulator[i][j] = 1'b0;
+    end
 
-    // Connect inputs_valid signals following systolic flow pattern
-    generate
-        for (row = 0; row < N; row = row + 1) begin : gen_valid_row
-            for (col = 0; col < N; col = col + 1) begin : gen_valid_col
-                if (row == 0 && col == 0) begin
-                    // Top-left PE gets external inputs_valid
-                    assign inputs_valid_internal[row][col] = inputs_valid_i;
-                end
-                else if (row == 0) begin
-                    // Top row (except top-left): gets valid from western neighbor
-                    assign inputs_valid_internal[row][col] = passthrough_valid_o[row][col-1];
-                end
-                else if (col == 0) begin
-                    // Left column (except top-left): gets valid from northern neighbor
-                    assign inputs_valid_internal[row][col] = passthrough_valid_o[row-1][col];
-                end
-                else begin
-                    // Interior PEs: AND of northern and western neighbor valid signals
-                    assign inputs_valid_internal[row][col] = passthrough_valid_o[row-1][col] & passthrough_valid_o[row][col-1];
-                end
-            end
-        end
-    endgenerate
+    Mesh #(
+        .N(N),
+        .DATA_WIDTH(DATA_WIDTH)
+    ) systolic_array_inst (
+        .clk_i(clk_i),
+        .rstn_i(rstn_i),
+        .north_i(weight_in_north),
+        .west_i(data_in_west),
+        .inputs_valid_i(inputs_valid),
+        .select_accumulator_i(select_accumulator),
+        .south_o(south_o),
+        .east_o(east_o),
+        .passthrough_valid_o(passthrough_valid_o),
+        .accumulator_valid_o(accumulator_valid_o)
+    );
+
+    // Matrix multiplication complete when both queues are empty
+    assign matrix_mult_complete_o = north_queue_empty_o && west_queue_empty_o;
+
+endmodule
+
+// Wrapper module for North Input Queue
+module NorthInputQueue #(
+    parameter N = 8,
+    parameter DATA_WIDTH = 32,
+    parameter MEM_FILE = "weights.mem"
+) (
+    input logic clk_i,
+    input logic rstn_i,
+    input logic start_i,
+    input logic [N-1:0] top_edge_passthrough_valid_i,  // From top edge PEs
+    output logic [DATA_WIDTH-1:0] weight_out_north [0:N-1],
+    output logic inputs_valid_o,
+    output logic queue_empty_o
+);
+
+    ColumnInputQueue #(
+        .N(N),
+        .DATA_WIDTH(DATA_WIDTH),
+        .MEM_FILE(MEM_FILE)
+    ) north_queue_inst (
+        .clk_i(clk_i),
+        .rstn_i(rstn_i),
+        .start_i(start_i),
+        .passthrough_valid_i(top_edge_passthrough_valid_i),
+        .data_o(weight_out_north),
+        .data_valid_o(inputs_valid_o),
+        .queue_empty_o(queue_empty_o)
+    );
+
+endmodule
+
+
+// Wrapper module for West Input Queue
+module WestInputQueue #(
+    parameter N = 8,
+    parameter DATA_WIDTH = 32,
+    parameter MEM_FILE = "data.mem"
+) (
+    input logic clk_i,
+    input logic rstn_i,
+    input logic start_i,
+    input logic [N-1:0] left_edge_passthrough_valid_i,  // From left edge PEs
+    output logic [DATA_WIDTH-1:0] data_out_west [0:N-1],
+    output logic queue_empty_o
+);
+
+    RowInputQueue #(
+        .N(N),
+        .DATA_WIDTH(DATA_WIDTH),
+        .MEM_FILE(MEM_FILE)
+    ) west_queue_inst (
+        .clk_i(clk_i),
+        .rstn_i(rstn_i),
+        .start_i(start_i),
+        .passthrough_valid_i(left_edge_passthrough_valid_i),
+        .data_o(data_out_west),
+        .data_valid_o(),  // Not used for west queue
+        .queue_empty_o(queue_empty_o)
+    );
 
 endmodule

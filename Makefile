@@ -11,20 +11,20 @@ WAVE = surfer
 
 # Design Files for SA Array
 DESIGN_FILES = \
-	SystolicArrayWithQueues.sv \
+	SystolicArray.sv \
 	RowInputQueue.sv \
 	ColumnInputQueue.sv \
-	SystolicArray.sv \
+	Mesh.sv \
 	ProcessingElement.sv \
-	Adder_FP32.sv \
-	LZC.sv \
-	Multiplier_FP32 \
-	UnSig_Karatsuba.sv \
-	UnSig_R4Booth.sv \
-	MAC.sv
+	MAC/Adder_FP32.sv \
+	MAC/LZC.sv \
+	MAC/Multiplier_FP32 \
+	MAC/UnSig_Karatsuba.sv \
+	MAC/UnSig_R4Booth.sv \
+	MAC/MAC.sv
 
 # Top module
-TOP_MODULE = TB_SystolicArrayWithQueues
+TOP_MODULE = TB_SystolicArray
 # Testbench
 TESTBENCH = $(TOP_MODULE).sv
 
@@ -44,7 +44,8 @@ VERILATOR_FLAGS = \
 	--Mdir $(VERILATOR_DIR) \
 	--Wno-WIDTHTRUNC \
 	--Wno-WIDTHEXPAND \
-	--Wno-WIDTHCONCAT
+	--Wno-WIDTHCONCAT \
+	--Wno-PINMISSING
 
 # VCS Flags
 VCS_FLAGS = \
