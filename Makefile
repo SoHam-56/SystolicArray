@@ -73,10 +73,14 @@ verilator:
 		-o $(TOP_MODULE)_sim
 	@echo "-- Compiling Verilator simulation"
 	make -C $(VERILATOR_DIR) -f V$(TOP_MODULE).mk
-	@echo "-- Copying memory files"
+	@echo "-- Copying input files"
 		@if ls $(SRC_DIR)/*.mem 1> /dev/null 2>&1; then \
 		cp $(SRC_DIR)/*.mem $(VERILATOR_DIR); \
-	fi
+		fi
+	@echo "-- Copying ouput files"
+		@if ls $(TB_DIR)/*.mem 1> /dev/null 2>&1; then \
+		cp $(TB_DIR)/*.mem $(VERILATOR_DIR); \
+		fi
 	@echo "-- Running Verilator simulation"
 	cd $(VERILATOR_DIR) && ./$(TOP_MODULE)_sim
 	@echo "-- Verilator simulation complete"

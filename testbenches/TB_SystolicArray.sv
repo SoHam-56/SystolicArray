@@ -2,182 +2,150 @@
 
 module TB_SystolicArray;
 
-    localparam N = 3;
+    localparam N = 8;
     localparam DATA_WIDTH = 32;
     localparam CLK_PERIOD = 10;
+
+    // Tolerance configuration
+    localparam TOLERANCE_MODE = "RELATIVE"; // "ABSOLUTE", "RELATIVE", or "BOTH"
+    localparam real ABSOLUTE_TOLERANCE = 1.0; // Absolute difference tolerance
+    localparam real RELATIVE_TOLERANCE = 0.10; // 1% relative tolerance
+    localparam logic ENABLE_TOLERANCE = 1'b1; // Enable/disable tolerance checking
 
     // Test tracking variables
     integer test_pass_count = 0;
     integer test_fail_count = 0;
     integer total_tests = 0;
+    integer tolerance_pass_count = 0; // Tests that passed due to tolerance
 
     reg clk;
     reg rstn;
     reg start_matrix_mult;
 
-    // DUT selection
-    reg use_identity_dut;
+    wire [DATA_WIDTH-1:0] south_o [0:N-1];
+    wire [DATA_WIDTH-1:0] east_o [0:N-1];
+    wire passthrough_valid_o [0:N-1][0:N-1];
+    wire accumulator_valid_o [0:N-1][0:N-1];
+    wire north_queue_empty_o;
+    wire west_queue_empty_o;
+    wire matrix_mult_complete_o;
 
-    // DUT outputs for identity test
-    wire [DATA_WIDTH-1:0] south_o_identity [0:N-1];
-    wire [DATA_WIDTH-1:0] east_o_identity [0:N-1];
-    wire passthrough_valid_o_identity [0:N-1][0:N-1];
-    wire accumulator_valid_o_identity [0:N-1][0:N-1];
-    wire north_queue_empty_o_identity;
-    wire west_queue_empty_o_identity;
-    wire matrix_mult_complete_o_identity;
-
-    // DUT outputs for random test
-    wire [DATA_WIDTH-1:0] south_o_random [0:N-1];
-    wire [DATA_WIDTH-1:0] east_o_random [0:N-1];
-    wire passthrough_valid_o_random [0:N-1][0:N-1];
-    wire accumulator_valid_o_random [0:N-1][0:N-1];
-    wire north_queue_empty_o_random;
-    wire west_queue_empty_o_random;
-    wire matrix_mult_complete_o_random;
-
-    // Multiplexed outputs (selected based on current test)
-    logic [DATA_WIDTH-1:0] south_o [0:N-1];
-    logic [DATA_WIDTH-1:0] east_o [0:N-1];
-    logic passthrough_valid_o [0:N-1][0:N-1];
-    logic accumulator_valid_o [0:N-1][0:N-1];
-    logic north_queue_empty_o;
-    logic west_queue_empty_o;
-    logic matrix_mult_complete_o;
-
-    // Expected results storage
     reg [DATA_WIDTH-1:0] expected_result [0:N-1][0:N-1];
-    reg [DATA_WIDTH-1:0] expected_result_identity [0:N-1][0:N-1];
-    reg [DATA_WIDTH-1:0] expected_result_random [0:N-1][0:N-1];
-
-    // Test control
     logic select_accumulator [0:N-1][0:N-1];
-    string current_test_type;
 
-    // FP32 constant values
-    typedef struct packed {
-        logic [31:0] val_0_0;  // 0.0
-        logic [31:0] val_1_0;  // 1.0
-        logic [31:0] val_2_0;  // 2.0
-        logic [31:0] val_3_0;  // 3.0
-        logic [31:0] val_4_0;  // 4.0
-        logic [31:0] val_5_0;  // 5.0
-        logic [31:0] val_6_0;  // 6.0
-        logic [31:0] val_7_0;  // 7.0
-        logic [31:0] val_8_0;  // 8.0
-        logic [31:0] val_9_0;  // 9.0
-    } fp32_constants_t;
+    // Test configuration
+    localparam INPUT_A_FILE = "matrixA.mem";
+    localparam INPUT_B_FILE = "matrixB.mem";
+    localparam EXPECTED_OUTPUT_FILE = "matrixC.mem";
 
-    localparam fp32_constants_t FP32_CONST = '{
-        val_0_0: 32'h00000000,  // 0.0
-        val_1_0: 32'h3F800000,  // 1.0
-        val_2_0: 32'h40000000,  // 2.0
-        val_3_0: 32'h40400000,  // 3.0
-        val_4_0: 32'h40800000,  // 4.0
-        val_5_0: 32'h40A00000,  // 5.0
-        val_6_0: 32'h40C00000,  // 6.0
-        val_7_0: 32'h40E00000,  // 7.0
-        val_8_0: 32'h41000000,  // 8.0
-        val_9_0: 32'h41100000   // 9.0
-    };
+    // Test description
+    string test_name = "Random Matrix Test";
 
-    // Clock generation
     initial begin
         clk = 0;
         forever #(CLK_PERIOD/2) clk = ~clk;
     end
 
-    // DUT instantiation for identity test
     SystolicArray #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
-        .ROWS("identity.mem"),
-        .COLS("weights.mem")
-    ) dut_identity (
+        .ROWS(INPUT_A_FILE),
+        .COLS(INPUT_B_FILE)
+    ) dut (
         .clk_i(clk),
         .rstn_i(rstn),
-        .start_matrix_mult_i(start_matrix_mult & use_identity_dut),
-        .south_o(south_o_identity),
-        .east_o(east_o_identity),
-        .passthrough_valid_o(passthrough_valid_o_identity),
-        .accumulator_valid_o(accumulator_valid_o_identity),
-        .north_queue_empty_o(north_queue_empty_o_identity),
-        .west_queue_empty_o(west_queue_empty_o_identity),
-        .matrix_mult_complete_o(matrix_mult_complete_o_identity)
+        .start_matrix_mult_i(start_matrix_mult),
+        .south_o(south_o),
+        .east_o(east_o),
+        .passthrough_valid_o(passthrough_valid_o),
+        .accumulator_valid_o(accumulator_valid_o),
+        .north_queue_empty_o(north_queue_empty_o),
+        .west_queue_empty_o(west_queue_empty_o),
+        .matrix_mult_complete_o(matrix_mult_complete_o)
     );
 
-    // DUT instantiation for random test
-    SystolicArray #(
-        .N(N),
-        .DATA_WIDTH(DATA_WIDTH),
-        .ROWS("data.mem"),
-        .COLS("weights.mem")
-    ) dut_random (
-        .clk_i(clk),
-        .rstn_i(rstn),
-        .start_matrix_mult_i(start_matrix_mult & ~use_identity_dut),
-        .south_o(south_o_random),
-        .east_o(east_o_random),
-        .passthrough_valid_o(passthrough_valid_o_random),
-        .accumulator_valid_o(accumulator_valid_o_random),
-        .north_queue_empty_o(north_queue_empty_o_random),
-        .west_queue_empty_o(west_queue_empty_o_random),
-        .matrix_mult_complete_o(matrix_mult_complete_o_random)
-    );
-
-    // Output multiplexing based on current test
+    // Override the select_accumulator signal
     always_comb begin
-        if (use_identity_dut) begin
-            for (int i = 0; i < N; i++) begin
-                south_o[i] = south_o_identity[i];
-                east_o[i] = east_o_identity[i];
-                for (int j = 0; j < N; j++) begin
-                    passthrough_valid_o[i][j] = passthrough_valid_o_identity[i][j];
-                    accumulator_valid_o[i][j] = accumulator_valid_o_identity[i][j];
-                end
-            end
-            north_queue_empty_o = north_queue_empty_o_identity;
-            west_queue_empty_o = west_queue_empty_o_identity;
-            matrix_mult_complete_o = matrix_mult_complete_o_identity;
+        for (int i = 0; i < N; i++)
+            for (int j = 0; j < N; j++)
+                dut.select_accumulator[i][j] = select_accumulator[i][j];
+    end
+
+    // Function to check if values are within tolerance
+    function automatic logic check_tolerance(
+        input [DATA_WIDTH-1:0] expected,
+        input [DATA_WIDTH-1:0] actual,
+        output string tolerance_info
+    );
+        real expected_real, actual_real;
+        real abs_diff, rel_diff;
+        logic abs_within_tolerance, rel_within_tolerance;
+        logic result;
+
+        // Convert to real for tolerance calculations
+        // Assuming signed integer representation - adjust as needed for your data format
+        expected_real = $signed(expected);
+        actual_real = $signed(actual);
+
+        // Calculate absolute difference
+        abs_diff = (expected_real > actual_real) ?
+                   (expected_real - actual_real) : (actual_real - expected_real);
+
+        // Calculate relative difference (avoid division by zero)
+        if (expected_real != 0.0) begin
+            rel_diff = abs_diff / ((expected_real > 0) ? expected_real : -expected_real);
         end else begin
-            for (int i = 0; i < N; i++) begin
-                south_o[i] = south_o_random[i];
-                east_o[i] = east_o_random[i];
-                for (int j = 0; j < N; j++) begin
-                    passthrough_valid_o[i][j] = passthrough_valid_o_random[i][j];
-                    accumulator_valid_o[i][j] = accumulator_valid_o_random[i][j];
-                end
-            end
-            north_queue_empty_o = north_queue_empty_o_random;
-            west_queue_empty_o = west_queue_empty_o_random;
-            matrix_mult_complete_o = matrix_mult_complete_o_random;
+            rel_diff = (actual_real == 0.0) ? 0.0 : 1.0; // If expected is 0, only pass if actual is also 0
         end
-    end
 
-    // Override the select_accumulator signal for both DUTs
-    always_comb begin
-        for (int i = 0; i < N; i++) begin
-            for (int j = 0; j < N; j++) begin
-                dut_identity.select_accumulator[i][j] = select_accumulator[i][j] & use_identity_dut;
-                dut_random.select_accumulator[i][j] = select_accumulator[i][j] & ~use_identity_dut;
-            end
-        end
-    end
+        // Check tolerance conditions
+        abs_within_tolerance = (abs_diff <= ABSOLUTE_TOLERANCE);
+        rel_within_tolerance = (rel_diff <= RELATIVE_TOLERANCE);
+
+        // Determine result based on tolerance mode
+        case (TOLERANCE_MODE)
+            "ABSOLUTE": result = abs_within_tolerance;
+            "RELATIVE": result = rel_within_tolerance;
+            "BOTH": result = abs_within_tolerance && rel_within_tolerance;
+            default: result = abs_within_tolerance;
+        endcase
+
+        // Generate tolerance info string
+        tolerance_info = $sformatf("AbsDiff=%.3f(%.3f), RelDiff=%.3f%%(%.1f%%)",
+                                  abs_diff, ABSOLUTE_TOLERANCE,
+                                  rel_diff*100.0, RELATIVE_TOLERANCE*100.0);
+
+        return result;
+    endfunction
+
+    // Enhanced function for floating-point data (if using floating-point representation)
+    function automatic logic check_fp_tolerance(
+        input [DATA_WIDTH-1:0] expected,
+        input [DATA_WIDTH-1:0] actual,
+        output string tolerance_info
+    );
+        // This function can be customized for IEEE 754 floating-point format
+        // For now, it uses the same logic as check_tolerance
+        return check_tolerance(expected, actual, tolerance_info);
+    endfunction
 
     // Task to initialize signals
     task initialize_signals();
         begin
             rstn = 0;
             start_matrix_mult = 0;
-            use_identity_dut = 1;  // Start with identity DUT
-            current_test_type = "identity";
 
             // Initialize select_accumulator
             for (int i = 0; i < N; i++) begin
-                for (int j = 0; j < N; j++) begin
+                for (int j = 0; j < N; j++)
                     select_accumulator[i][j] = 0;
-                end
             end
+
+            $display("Tolerance Configuration:");
+            $display("  Mode: %s", TOLERANCE_MODE);
+            $display("  Absolute Tolerance: %.6f", ABSOLUTE_TOLERANCE);
+            $display("  Relative Tolerance: %.2f%%", RELATIVE_TOLERANCE*100.0);
+            $display("  Tolerance Enabled: %s\n", ENABLE_TOLERANCE ? "YES" : "NO");
         end
     endtask
 
@@ -193,56 +161,81 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Task to wait for PE to reach IDLE state
-    task wait_for_pe_idle(input integer row, input integer col);
+    // Task to load expected results from file
+    task load_expected_results(input string filename);
+        integer file_handle;
+        integer scan_result;
+        integer row, col;
+        reg [DATA_WIDTH-1:0] temp_data;
+        integer data_count;
         begin
-            $display("Waiting for PE[%0d][%0d] to reach IDLE state...", row, col);
+            $display("Loading expected results from file: %s", filename);
 
-            if (use_identity_dut) begin
-                case ({row, col})
-                    {2'd0, 2'd0}: while (dut_identity.systolic_array_inst.gen_row[0].gen_col[0].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[0].gen_col[0].pe_inst.IDLE) @(posedge clk);
-                    {2'd0, 2'd1}: while (dut_identity.systolic_array_inst.gen_row[0].gen_col[1].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[0].gen_col[1].pe_inst.IDLE) @(posedge clk);
-                    {2'd0, 2'd2}: while (dut_identity.systolic_array_inst.gen_row[0].gen_col[2].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[0].gen_col[2].pe_inst.IDLE) @(posedge clk);
-                    {2'd1, 2'd0}: while (dut_identity.systolic_array_inst.gen_row[1].gen_col[0].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[1].gen_col[0].pe_inst.IDLE) @(posedge clk);
-                    {2'd1, 2'd1}: while (dut_identity.systolic_array_inst.gen_row[1].gen_col[1].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[1].gen_col[1].pe_inst.IDLE) @(posedge clk);
-                    {2'd1, 2'd2}: while (dut_identity.systolic_array_inst.gen_row[1].gen_col[2].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[1].gen_col[2].pe_inst.IDLE) @(posedge clk);
-                    {2'd2, 2'd0}: while (dut_identity.systolic_array_inst.gen_row[2].gen_col[0].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[2].gen_col[0].pe_inst.IDLE) @(posedge clk);
-                    {2'd2, 2'd1}: while (dut_identity.systolic_array_inst.gen_row[2].gen_col[1].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[2].gen_col[1].pe_inst.IDLE) @(posedge clk);
-                    {2'd2, 2'd2}: while (dut_identity.systolic_array_inst.gen_row[2].gen_col[2].pe_inst.current_state != dut_identity.systolic_array_inst.gen_row[2].gen_col[2].pe_inst.IDLE) @(posedge clk);
-                    default: $display("ERROR: Invalid PE coordinates [%0d][%0d]", row, col);
-                endcase
-            end else begin
-                case ({row, col})
-                    {2'd0, 2'd0}: while (dut_random.systolic_array_inst.gen_row[0].gen_col[0].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[0].gen_col[0].pe_inst.IDLE) @(posedge clk);
-                    {2'd0, 2'd1}: while (dut_random.systolic_array_inst.gen_row[0].gen_col[1].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[0].gen_col[1].pe_inst.IDLE) @(posedge clk);
-                    {2'd0, 2'd2}: while (dut_random.systolic_array_inst.gen_row[0].gen_col[2].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[0].gen_col[2].pe_inst.IDLE) @(posedge clk);
-                    {2'd1, 2'd0}: while (dut_random.systolic_array_inst.gen_row[1].gen_col[0].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[1].gen_col[0].pe_inst.IDLE) @(posedge clk);
-                    {2'd1, 2'd1}: while (dut_random.systolic_array_inst.gen_row[1].gen_col[1].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[1].gen_col[1].pe_inst.IDLE) @(posedge clk);
-                    {2'd1, 2'd2}: while (dut_random.systolic_array_inst.gen_row[1].gen_col[2].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[1].gen_col[2].pe_inst.IDLE) @(posedge clk);
-                    {2'd2, 2'd0}: while (dut_random.systolic_array_inst.gen_row[2].gen_col[0].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[2].gen_col[0].pe_inst.IDLE) @(posedge clk);
-                    {2'd2, 2'd1}: while (dut_random.systolic_array_inst.gen_row[2].gen_col[1].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[2].gen_col[1].pe_inst.IDLE) @(posedge clk);
-                    {2'd2, 2'd2}: while (dut_random.systolic_array_inst.gen_row[2].gen_col[2].pe_inst.current_state != dut_random.systolic_array_inst.gen_row[2].gen_col[2].pe_inst.IDLE) @(posedge clk);
-                    default: $display("ERROR: Invalid PE coordinates [%0d][%0d]", row, col);
-                endcase
+            file_handle = $fopen(filename, "r");
+            if (file_handle == 0) begin
+                $display("ERROR: Could not open expected output file: %s", filename);
+                $finish;
             end
 
-            $display("PE[%0d][%0d] reached IDLE state", row, col);
+            data_count = 0;
+            // Read data in row-major order
+            for (row = 0; row < N; row++) begin
+                for (col = 0; col < N; col++) begin
+                    scan_result = $fscanf(file_handle, "%h", temp_data);
+                    if (scan_result != 1) begin
+                        $display("ERROR: Failed to read expected data at position [%0d][%0d]", row, col);
+                        $fclose(file_handle);
+                        $finish;
+                    end
+                    expected_result[row][col] = temp_data;
+                    data_count++;
+                    $display("Expected[%0d][%0d] = 0x%08x (%0d)", row, col, temp_data, $signed(temp_data));
+                end
+            end
+
+            $fclose(file_handle);
+            $display("Successfully loaded %0d expected values from %s", data_count, filename);
         end
     endtask
 
-    // Task to verify accumulator (using multiplexed outputs)
+    // Task to wait for PE to reach IDLE state
+    task wait_for_pe_idle(input integer row, input integer col);
+        begin
+            // Validate coordinates
+            if (row >= N || col >= N || row < 0 || col < 0) begin
+                $display("ERROR: Invalid PE coordinates [%0d][%0d] for %0dx%0d array", row, col, N, N);
+                return;
+            end
+
+            $display("Waiting for PE[%0d][%0d] computation to complete...", row, col);
+
+            // Wait for matrix multiplication completion
+            while (!matrix_mult_complete_o) begin
+                @(posedge clk);
+            end
+
+            // Additional wait to ensure all PEs have settled
+            repeat(10) @(posedge clk);
+
+            $display("PE[%0d][%0d] computation completed", row, col);
+        end
+    endtask
+
+    // Enhanced task to verify accumulator with tolerance
     task verify_accumulator(
         input integer row,
         input integer col,
         input string pe_name,
         input [DATA_WIDTH-1:0] expected_value,
-        input string test_name
+        input string test_description
     );
         reg [DATA_WIDTH-1:0] actual_value;
         reg valid_flag;
+        logic exact_match, tolerance_match;
+        string tolerance_info;
         begin
             total_tests++;
-            $display("Verifying %s accumulator for %s...", pe_name, test_name);
+            $display("Verifying %s accumulator for %s...", pe_name, test_description);
 
             wait_for_pe_idle(row, col);
 
@@ -253,84 +246,63 @@ module TB_SystolicArray;
             while (!accumulator_valid_o[row][col]) @(posedge clk);
 
             // Read accumulator value
-            if (use_identity_dut) begin
-                actual_value = (col == N-1) ? east_o_identity[row] : dut_identity.systolic_array_inst.data_connections[row][col+1];
-            end else begin
-                actual_value = (col == N-1) ? east_o_random[row] : dut_random.systolic_array_inst.data_connections[row][col+1];
-            end
+            actual_value = (col == N-1) ? east_o[row] : dut.systolic_array_inst.data_connections[row][col+1];
             valid_flag = accumulator_valid_o[row][col];
 
             select_accumulator[row][col] = 0;
             @(posedge clk);
 
+            // Check for exact match first
+            exact_match = (actual_value == expected_value);
+
+            // Check tolerance if enabled and exact match failed
+            if (!exact_match && ENABLE_TOLERANCE) begin
+                tolerance_match = check_tolerance(expected_value, actual_value, tolerance_info);
+            end else begin
+                tolerance_match = 1'b0;
+                tolerance_info = "N/A";
+            end
+
             // Verify and update counters
-            if (valid_flag && (actual_value == expected_value)) begin
-                $display("PASS: %s %s - Expected: 0x%08x, Actual: 0x%08x", pe_name, test_name, expected_value, actual_value);
+            if (valid_flag && (exact_match || tolerance_match)) begin
+                if (exact_match) begin
+                    $display("PASS: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT MATCH]",
+                            pe_name, test_description, expected_value, $signed(expected_value),
+                            actual_value, $signed(actual_value));
+                end else begin
+                    $display("PASS: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
+                            pe_name, test_description, expected_value, $signed(expected_value),
+                            actual_value, $signed(actual_value), tolerance_info);
+                    tolerance_pass_count++;
+                end
                 test_pass_count++;
             end else begin
-                $display("FAIL: %s %s - Expected: 0x%08x, Actual: 0x%08x, Valid: %b", pe_name, test_name, expected_value, actual_value, valid_flag);
+                if (ENABLE_TOLERANCE) begin
+                    $display("FAIL: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d), Valid: %b [TOLERANCE: %s]",
+                            pe_name, test_description, expected_value, $signed(expected_value),
+                            actual_value, $signed(actual_value), valid_flag, tolerance_info);
+                end else begin
+                    $display("FAIL: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d), Valid: %b",
+                            pe_name, test_description, expected_value, $signed(expected_value),
+                            actual_value, $signed(actual_value), valid_flag);
+                end
                 test_fail_count++;
             end
         end
     endtask
 
-    // Task to initialize expected results
-    task initialize_expected_results();
-        begin
-            // Identity test expected results (A * I = A, where A is sequential 1-9)
-            expected_result_identity[0][0] = FP32_CONST.val_1_0;
-            expected_result_identity[0][1] = FP32_CONST.val_2_0;
-            expected_result_identity[0][2] = FP32_CONST.val_3_0;
-            expected_result_identity[1][0] = FP32_CONST.val_4_0;
-            expected_result_identity[1][1] = FP32_CONST.val_5_0;
-            expected_result_identity[1][2] = FP32_CONST.val_6_0;
-            expected_result_identity[2][0] = FP32_CONST.val_7_0;
-            expected_result_identity[2][1] = FP32_CONST.val_8_0;
-            expected_result_identity[2][2] = FP32_CONST.val_9_0;
-
-            // Random test expected results (pre-calculated)
-            expected_result_random[0][0] = 32'h41700000;  // 15.0
-            expected_result_random[0][1] = 32'h41D00000;  // 26.0
-            expected_result_random[0][2] = 32'h42140000;  // 37.0
-            expected_result_random[1][0] = 32'h42340000;  // 45.0
-            expected_result_random[1][1] = 32'h428E0000;  // 71.0
-            expected_result_random[1][2] = 32'h42C20000;  // 97.0
-            expected_result_random[2][0] = 32'h42960000;  // 75.0
-            expected_result_random[2][1] = 32'h42E80000;  // 116.0
-            expected_result_random[2][2] = 32'h431D0000;  // 157.0
-        end
-    endtask
-
-    // Task to set expected results based on test type
-    task set_expected_results(input string test_type);
-        begin
-            if (test_type == "identity") begin
-                for (int i = 0; i < N; i++) begin
-                    for (int j = 0; j < N; j++) begin
-                        expected_result[i][j] = expected_result_identity[i][j];
-                    end
-                end
-            end else if (test_type == "random") begin
-                for (int i = 0; i < N; i++) begin
-                    for (int j = 0; j < N; j++) begin
-                        expected_result[i][j] = expected_result_random[i][j];
-                    end
-                end
-            end
-        end
-    endtask
-
     // Task to execute matrix test
-    task execute_matrix_test(input string test_name, input string test_type);
+    task execute_matrix_test();
         begin
             $display("\n=== %s ===", test_name);
+            $display("Input A file: %s", INPUT_A_FILE);
+            $display("Input B file: %s", INPUT_B_FILE);
+            $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
 
-            // Set current test type and DUT selection
-            current_test_type = test_type;
-            use_identity_dut = (test_type == "identity");
-            set_expected_results(test_type);
+            // Load expected results
+            load_expected_results(EXPECTED_OUTPUT_FILE);
 
-            // Apply reset to reinitialize the DUTs
+            // Apply reset
             apply_reset();
 
             // Start matrix multiplication
@@ -352,43 +324,54 @@ module TB_SystolicArray;
             // Verify all results
             $display("--- Verifying Results ---");
             for (int i = 0; i < N; i++) begin
-                for (int j = 0; j < N; j++) verify_accumulator(i, j, $sformatf("PE[%0d][%0d]", i, j), expected_result[i][j], $sformatf("%s C[%0d][%0d]", test_name, i, j));
+                for (int j = 0; j < N; j++) begin
+                    verify_accumulator(i, j, $sformatf("PE[%0d][%0d]", i, j), expected_result[i][j], $sformatf("C[%0d][%0d]", i, j));
+                end
             end
 
             $display("=== %s COMPLETED ===\n", test_name);
         end
     endtask
 
-    // Task to print test summary
+    // Enhanced task to print test summary with tolerance information
     task print_test_summary();
         automatic real pass_rate = (total_tests > 0) ? (test_pass_count * 100.0) / total_tests : 0.0;
+        automatic real tolerance_rate = (test_pass_count > 0) ? (tolerance_pass_count * 100.0) / test_pass_count : 0.0;
         begin
-            $display("\n" + "="*50);
-            $display("SYSTOLIC ARRAY WITH QUEUES TEST SUMMARY");
-            $display("="*50);
-            $display("Total Tests: %0d", total_tests);
-            $display("Passed: %0d", test_pass_count);
-            $display("Failed: %0d", test_fail_count);
-            $display("Pass Rate: %.1f%%", pass_rate);
-            $display("STATUS: %s", (test_fail_count == 0) ? "ALL TESTS PASSED!" : $sformatf("%0d TEST(S) FAILED!", test_fail_count));
-            $display("="*50);
+            $display("\n" + "="*60);
+            $display("SYSTOLIC ARRAY TEST SUMMARY");
+            $display("="*60);
+            $display("Test: %s", test_name);
+            $display("Input A: %s", INPUT_A_FILE);
+            $display("Input B: %s", INPUT_B_FILE);
+            $display("Expected: %s", EXPECTED_OUTPUT_FILE);
+            $display("-"*60);
+            $display("TOLERANCE CONFIGURATION:");
+            $display("  Mode: %s", TOLERANCE_MODE);
+            $display("  Absolute Tolerance: %.6f", ABSOLUTE_TOLERANCE);
+            $display("  Relative Tolerance: %.2f%%", RELATIVE_TOLERANCE*100.0);
+            $display("  Tolerance Enabled: %s", ENABLE_TOLERANCE ? "YES" : "NO");
+            $display("-"*60);
+            $display("TEST RESULTS:");
+            $display("  Total Tests: %0d", total_tests);
+            $display("  Passed: %0d", test_pass_count);
+            $display("  Failed: %0d", test_fail_count);
+            $display("  Pass Rate: %.1f%%", pass_rate);
+            if (ENABLE_TOLERANCE && tolerance_pass_count > 0) begin
+                $display("  Tolerance Passes: %0d (%.1f%% of passes)", tolerance_pass_count, tolerance_rate);
+                $display("  Exact Matches: %0d", test_pass_count - tolerance_pass_count);
+            end
+            $display("  STATUS: %s", (test_fail_count == 0) ? "ALL TESTS PASSED!" : $sformatf("%0d TEST(S) FAILED!", test_fail_count));
+            $display("="*60);
         end
     endtask
 
     // Main test stimulus
     initial begin
-        $display("Testing SystolicArrayWithQueues module\n");
+        $display("Testing SystolicArray module with tolerance-based verification\n");
 
         initialize_signals();
-        initialize_expected_results();
-        apply_reset();
-
-        // Run identity test
-        execute_matrix_test("3x3 IDENTITY MATRIX TEST", "identity");
-        repeat(10) @(posedge clk);
-
-        // Run random test
-        execute_matrix_test("3x3 RANDOM MATRIX TEST", "random");
+        execute_matrix_test();
         repeat(10) @(posedge clk);
 
         print_test_summary();

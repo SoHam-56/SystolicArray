@@ -44,7 +44,7 @@ module SystolicArray #(
     NorthInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
-        .MEM_FILE(ROWS)
+        .MEM_FILE(COLS)
     ) north_queue (
         .clk_i(clk_i),
         .rstn_i(rstn_i),
@@ -58,7 +58,7 @@ module SystolicArray #(
     WestInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
-        .MEM_FILE(COLS)
+        .MEM_FILE(ROWS)
     ) west_queue (
         .clk_i(clk_i),
         .rstn_i(rstn_i),
