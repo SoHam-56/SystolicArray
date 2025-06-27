@@ -32,6 +32,8 @@ module SystolicArray #(
     logic [N-1:0] top_edge_passthrough_valid;
     logic [N-1:0] left_edge_passthrough_valid;
 
+    logic [N-1:0] last_row, last_col;
+
     
     always_comb begin
         for (int i = 0; i < N; i++) begin
@@ -51,7 +53,7 @@ module SystolicArray #(
         .start_i(start_matrix_mult_i),
         .top_edge_passthrough_valid_i(top_edge_passthrough_valid),
         .weight_out_north(weight_in_north),
-        .inputs_valid_o(inputs_valid),
+        .last_o(last_col),
         .queue_empty_o(north_queue_empty_o)
     );
 
@@ -65,10 +67,11 @@ module SystolicArray #(
         .start_i(start_matrix_mult_i),
         .left_edge_passthrough_valid_i(left_edge_passthrough_valid),
         .data_out_west(data_in_west),
+        .inputs_valid_o(inputs_valid),
+        .last_o(last_row),
         .queue_empty_o(west_queue_empty_o)
     );
 
-    // Set all accumulator selects to 0 for now (you can control this as needed)
     always_comb begin
         for (int i = 0; i < N; i++)
             for (int j = 0; j < N; j++) select_accumulator[i][j] = 1'b0;
@@ -83,15 +86,17 @@ module SystolicArray #(
         .north_i(weight_in_north),
         .west_i(data_in_west),
         .inputs_valid_i(inputs_valid),
+        .last_element_i(last_row[N-1]),
         .select_accumulator_i(select_accumulator),
         .south_o(south_o),
         .east_o(east_o),
         .passthrough_valid_o(passthrough_valid_o),
-        .accumulator_valid_o(accumulator_valid_o)
+        .accumulator_valid_o(accumulator_valid_o),
+        .done_o(matrix_mult_complete_o)
     );
 
-    // Matrix multiplication complete when both queues are empty
-    assign matrix_mult_complete_o = north_queue_empty_o && west_queue_empty_o;
+    // Matrix multiplication complete
+     // assign matrix_mult_complete_o = north_queue_empty_o && west_queue_empty_o;  // TODO later
 
 endmodule
 
@@ -106,10 +111,9 @@ module NorthInputQueue #(
     input logic start_i,
     input logic [N-1:0] top_edge_passthrough_valid_i,  // From top edge PEs
     output logic [DATA_WIDTH-1:0] weight_out_north [0:N-1],
-    output logic inputs_valid_o,
+    output logic [N-1:0] last_o,
     output logic queue_empty_o
 );
-
     ColumnInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
@@ -120,12 +124,11 @@ module NorthInputQueue #(
         .start_i(start_i),
         .passthrough_valid_i(top_edge_passthrough_valid_i),
         .data_o(weight_out_north),
-        .data_valid_o(inputs_valid_o),
+        .data_valid_o(),
+        .last_o(last_o),
         .queue_empty_o(queue_empty_o)
     );
-
 endmodule
-
 
 // Wrapper module for West Input Queue
 module WestInputQueue #(
@@ -138,9 +141,10 @@ module WestInputQueue #(
     input logic start_i,
     input logic [N-1:0] left_edge_passthrough_valid_i,  // From left edge PEs
     output logic [DATA_WIDTH-1:0] data_out_west [0:N-1],
+    output logic inputs_valid_o,
+    output logic [N-1:0] last_o,
     output logic queue_empty_o
 );
-
     RowInputQueue #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
@@ -151,8 +155,8 @@ module WestInputQueue #(
         .start_i(start_i),
         .passthrough_valid_i(left_edge_passthrough_valid_i),
         .data_o(data_out_west),
-        .data_valid_o(),  // Not used for west queue
+        .data_valid_o(inputs_valid_o),
+        .last_o(last_o),
         .queue_empty_o(queue_empty_o)
     );
-
 endmodule

@@ -2,7 +2,7 @@
 
 module TB_SystolicArray;
 
-    localparam N = 8;
+    localparam N = 32;
     localparam DATA_WIDTH = 32;
     localparam CLK_PERIOD = 10;
 
@@ -380,7 +380,7 @@ module TB_SystolicArray;
 
     // Timeout
     initial begin
-        #100000;
+        #10000000;
         $display("ERROR: Testbench timeout after 1ms!");
         print_test_summary();
         $finish;

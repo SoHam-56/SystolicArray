@@ -14,8 +14,9 @@ module Mesh #(
     input wire [DATA_WIDTH-1:0] west_i [0:N-1],
 
     // Control inputs
-    input wire inputs_valid_i,                    // Single input valid for top-left PE
-    input wire select_accumulator_i [0:N-1][0:N-1],  // Individual accumulator select for each PE
+    input wire inputs_valid_i,                          // Single input valid for top-left PE
+    input wire last_element_i,                          // Pulse that indicates last element has been released from InputQueue
+    input wire select_accumulator_i [0:N-1][0:N-1],     // Individual accumulator select for each PE
 
     // Data outputs (bottom row - South boundary)
     output wire [DATA_WIDTH-1:0] south_o [0:N-1],
@@ -25,7 +26,8 @@ module Mesh #(
 
     // Status outputs for each PE
     output wire passthrough_valid_o [0:N-1][0:N-1],
-    output wire accumulator_valid_o [0:N-1][0:N-1]
+    output wire accumulator_valid_o [0:N-1][0:N-1],
+    output wire done_o
 );
 
     // Internal connection wires
@@ -50,12 +52,14 @@ module Mesh #(
                     .rstn_i(rstn_i),
                     .north_i(weight_connections[row][col]),
                     .west_i(data_connections[row][col]),
-                    .inputs_valid(inputs_valid_internal[row][col]),
-                    .select_accumulator(select_accumulator_i[row][col]),
+                    .inputs_valid_i(inputs_valid_internal[row][col]),
+                    .last_element_i(last_element_i),
+                    .select_accumulator_i(select_accumulator_i[row][col]),
                     .south_o(weight_connections[row+1][col]),
                     .east_o(data_connections[row][col+1]),
-                    .passthrough_valid(passthrough_valid_o[row][col]),
-                    .accumulator_valid(accumulator_valid_o[row][col])
+                    .passthrough_valid_o(passthrough_valid_o[row][col]),
+                    .accumulator_valid_o(accumulator_valid_o[row][col]),
+                    .done_o(done_o)
                 );
             end
         end
