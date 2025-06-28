@@ -39,7 +39,7 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
     wire select_accumulator_gated;
 
     // Registers to track last element processing
-    reg last_element_captured;
+    reg last_element_captured, passthrough_valid_captured;
 
     // State machine for PE operation
     typedef enum reg [1:0] {
@@ -97,9 +97,10 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
 
             // Capture last_element_i pulse (comes after the data/valid)
             if (last_element_i) last_element_captured <= 1'b1;
+            if (passthrough_valid_o) passthrough_valid_captured <= 1'b1;
 
             // Check for passthrough completion after last element was captured
-            if (last_element_captured && passthrough_valid_o) done_o <= 1'b1;
+            if (last_element_captured && passthrough_valid_captured) done_o <= 1'b1;
 
         end
     end
