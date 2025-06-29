@@ -6,42 +6,41 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
         input wire rstn_i,
 
         // Data inputs from neighboring PEs
-        input wire [DATA_WIDTH - 1:0] north_i,  // Data from north PE
-        input wire [DATA_WIDTH - 1:0] west_i,   // Data from west PE
+        input wire [DATA_WIDTH - 1:0] north_i,    // Data from north PE
+        input wire [DATA_WIDTH - 1:0] west_i,     // Data from west PE
 
         input wire inputs_valid_i,                // Unified control signal for inputs
         input wire last_element_i,
 
-        // Control signal for accumulator output selection (only effective in IDLE state)
-        input wire select_accumulator_i,  // 1: output accumulator, 0: output data passthrough
+        // Control signal for accumulator output selection
+        input wire select_accumulator_i,          // 1: output accumulator, 0: output data passthrough
 
         // Data outputs to neighboring PEs
-        output reg [DATA_WIDTH - 1:0] south_o,  // Pass data to south PE
-        output reg [DATA_WIDTH - 1:0] east_o,   // Muxed: data passthrough OR accumulator output
+        output reg [DATA_WIDTH - 1:0] south_o,    // Pass data to south PE
+        output reg [DATA_WIDTH - 1:0] east_o,     // Muxed: data passthrough OR accumulator output
 
         // Control outputs
-        output reg passthrough_valid_o,    // Valid for south_o and east_o (passthrough mode)
-        output reg accumulator_valid_o,    // Valid for east_o when in accumulator mode
-        output reg done_o                  // Goes high and stays high after last_element processing completes
+        output reg passthrough_valid_o,           // Valid for south_o and east_o (passthrough mode)
+        output reg accumulator_valid_o,           // Valid for east_o when in accumulator mode
+        output reg last_element_east_o
     );
 
-    // Internal registers for buffering outputs
     reg [DATA_WIDTH - 1:0] buffered_north;
     reg [DATA_WIDTH - 1:0] buffered_west;
     reg [DATA_WIDTH - 1:0] buffered_accumulator;
 
-    // MAC module signals
     wire [DATA_WIDTH - 1:0] mac_result;
     wire mac_done;
     reg mac_start;
 
-    // Internal signal for controlled accumulator selection
     wire select_accumulator_gated;
 
     // Registers to track last element processing
-    reg last_element_captured, passthrough_valid_captured;
+    reg last_element_captured;
 
-    // State machine for PE operation
+    wire last_element_pulse;
+    assign last_element_pulse = mac_done & last_element_captured;
+
     typedef enum reg [1:0] {
         IDLE = 2'b00,
         LOAD_DATA = 2'b01,
@@ -51,10 +50,8 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
 
     state_t current_state, next_state;
 
-    // Gate the select_accumulator signal - only allow it to be effective in IDLE state
     assign select_accumulator_gated = select_accumulator_i & (current_state == IDLE);
 
-    // State machine logic
     always @(posedge clk_i or negedge rstn_i) begin
         if (!rstn_i) begin
             current_state <= IDLE;
@@ -63,11 +60,10 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
         end
     end
 
-    // Next state logic
     always @(*) begin
         case (current_state)
             IDLE: begin
-                if (inputs_valid_i)  // Unified input valid check
+                if (inputs_valid_i)
                     next_state = LOAD_DATA;
                 else
                     next_state = IDLE;
@@ -88,27 +84,25 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
         endcase
     end
 
-    // Last element and done logic
+    // Last element capture logic
     always @(posedge clk_i or negedge rstn_i) begin
         if (!rstn_i) begin
             last_element_captured <= 1'b0;
-            done_o <= 1'b0;
         end else begin
-
-            // Capture last_element_i pulse (comes after the data/valid)
-            if (last_element_i) last_element_captured <= 1'b1;
-            if (passthrough_valid_o) passthrough_valid_captured <= 1'b1;
-
-            // Check for passthrough completion after last element was captured
-            if (last_element_captured && passthrough_valid_captured) done_o <= 1'b1;
-
+            // Capture last_element_i pulse (independent of FSM state)
+            if (last_element_i) begin
+                last_element_captured <= 1'b1;
+            end
+            
+            // Clear the captured flag when last element pulse is generated
+            if (last_element_pulse) begin
+                last_element_captured <= 1'b0;  // Clear for next operation
+            end
         end
     end
 
-    // Main PE logic
     always @(posedge clk_i or negedge rstn_i) begin
         if (!rstn_i) begin
-            // Reset all registers
             south_o <= {DATA_WIDTH{1'b0}};
             east_o <= {DATA_WIDTH{1'b0}};
 
@@ -124,6 +118,7 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
                 IDLE: begin
                     mac_start <= 1'b0;
                     passthrough_valid_o <= 1'b0;
+                    last_element_east_o <= 1'b0;
 
                     // Handle accumulator draining in IDLE state
                     if (select_accumulator_gated) begin
@@ -144,7 +139,7 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
                     mac_start <= 1'b1;
                     passthrough_valid_o <= 1'b0;
                     accumulator_valid_o <= 1'b0;
-
+                    last_element_east_o <= 1'b0;
                 end
 
                 MAC_COMPUTE: begin
@@ -152,19 +147,21 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
                     mac_start <= 1'b0;
                     passthrough_valid_o <= 1'b0;
                     accumulator_valid_o <= 1'b0;
+                    last_element_east_o <= 1'b0;
 
-                    // Buffer the MAC result when it's ready
+                    // Buffer the MAC result and generate last_element pulse when MAC is done
                     if (mac_done) begin
                         buffered_accumulator <= mac_result;
+                        last_element_east_o <= last_element_pulse;
                     end
                 end
 
                 OUTPUT: begin
-                    // Output data to south and east (passthrough mode only)
                     south_o <= buffered_north;
                     east_o <= buffered_west;
                     passthrough_valid_o <= 1'b1;
                     accumulator_valid_o <= 1'b0;
+                    last_element_east_o <= 1'b0;
                 end
             endcase
         end
@@ -175,11 +172,11 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
     ) MAC_UNIT (
         .clk_i(clk_i),
         .rstn_i(rstn_i),
-        .data_i(west_i),    // Data from west
-        .weight_i(north_i), // Data from north
+        .data_i(west_i),
+        .weight_i(north_i),
         .start_i(mac_start),
         .mac_done_o(mac_done),
-        .result_o(mac_result)       // This becomes buffered_accumulator
+        .result_o(mac_result)
     );
 
 endmodule

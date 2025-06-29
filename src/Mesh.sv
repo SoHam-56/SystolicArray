@@ -27,20 +27,28 @@ module Mesh #(
     // Status outputs for each PE
     output wire passthrough_valid_o [0:N-1][0:N-1],
     output wire accumulator_valid_o [0:N-1][0:N-1],
-    output wire done_o
+    output reg done_o,
+
+    // Last element output (right column - East boundary) for bottom row
+    output wire last_element_east_o [0:N-1]
 );
 
-    // Internal connection wires
-    // Data connections (North-South flow) - Fixed: needs N+1 rows for N PEs
-    wire [DATA_WIDTH-1:0] weight_connections [0:N][0:N-1];
+    // Data connections (North-South flow)
+    wire [DATA_WIDTH-1:0] north_connections [0:N][0:N-1];
 
-    // Weight connections (West-East flow) - Fixed: needs N+1 columns for N PEs
-    wire [DATA_WIDTH-1:0] data_connections [0:N-1][0:N];
+    // Weight connections (West-East flow)
+    wire [DATA_WIDTH-1:0] west_connections [0:N-1][0:N];
 
     // Valid signal connections (follow the systolic flow pattern)
     wire inputs_valid_internal [0:N-1][0:N-1];
 
-    // Generate PE mesh with systematic connections
+    // last_element connections (horizontal flow in bottom row)
+    wire last_element_horizontal [0:N-1][0:N];
+
+    // Done logic state tracking
+    reg last_element_seen;
+    reg waiting_for_passthrough;
+
     genvar row, col;
     generate
         for (row = 0; row < N; row = row + 1) begin : gen_row
@@ -50,16 +58,16 @@ module Mesh #(
                 ) pe_inst (
                     .clk_i(clk_i),
                     .rstn_i(rstn_i),
-                    .north_i(weight_connections[row][col]),
-                    .west_i(data_connections[row][col]),
+                    .north_i(north_connections[row][col]),
+                    .west_i(west_connections[row][col]),
                     .inputs_valid_i(inputs_valid_internal[row][col]),
-                    .last_element_i(last_element_i),
+                    .last_element_i(last_element_horizontal[row][col]),
                     .select_accumulator_i(select_accumulator_i[row][col]),
-                    .south_o(weight_connections[row+1][col]),
-                    .east_o(data_connections[row][col+1]),
+                    .south_o(north_connections[row+1][col]),
+                    .east_o(west_connections[row][col+1]),
                     .passthrough_valid_o(passthrough_valid_o[row][col]),
                     .accumulator_valid_o(accumulator_valid_o[row][col]),
-                    .done_o(done_o)
+                    .last_element_east_o(last_element_horizontal[row][col+1])
                 );
             end
         end
@@ -69,18 +77,35 @@ module Mesh #(
     generate
         for (col = 0; col < N; col = col + 1) begin : gen_weight_boundary
             // Top boundary: Connect external weight inputs to first row
-            assign weight_connections[0][col] = north_i[col];
+            assign north_connections[0][col] = north_i[col];
 
             // Bottom boundary: Connect last row outputs to external outputs
-            assign south_o[col] = weight_connections[N][col];
+            assign south_o[col] = north_connections[N][col];
         end
 
         for (row = 0; row < N; row = row + 1) begin : gen_data_boundary
             // Left boundary: Connect external data inputs to first column
-            assign data_connections[row][0] = west_i[row];
+            assign west_connections[row][0] = west_i[row];
 
             // Right boundary: Connect last column outputs to external outputs
-            assign east_o[row] = data_connections[row][N];
+            assign east_o[row] = west_connections[row][N];
+        end
+    endgenerate
+
+    // Connect last_element signals 
+    generate
+        for (row = 0; row < N; row = row + 1) begin : gen_last_element_boundary
+            if (row == N-1) begin
+                // Bottom row: Connect external last_element_i only to leftmost PE
+                assign last_element_horizontal[row][0] = last_element_i;
+                // Bottom row: Connect rightmost PE output to external output
+                assign last_element_east_o[row] = last_element_horizontal[row][N];
+            end else begin
+                // Other rows: No last_element input
+                assign last_element_horizontal[row][0] = 1'b0;
+                // Other rows: No last_element output
+                assign last_element_east_o[row] = 1'b0;
+            end
         end
     endgenerate
 
@@ -107,5 +132,26 @@ module Mesh #(
             end
         end
     endgenerate
+
+    // Done logic: Monitor bottom-right PE (PE[N-1][N-1])
+    always @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            last_element_seen <= 1'b0;
+            waiting_for_passthrough <= 1'b0;
+            done_o <= 1'b0;
+        end else begin
+            // Step 1: Detect last_element_east_o pulse from bottom-right PE
+            if (last_element_horizontal[N-1][N] && !last_element_seen) begin
+                last_element_seen <= 1'b1;
+                waiting_for_passthrough <= 1'b1;
+            end
+            
+            // Step 2: After seeing last_element, wait for passthrough_valid_o pulse
+            if (waiting_for_passthrough && passthrough_valid_o[N-1][N-1]) begin
+                done_o <= 1'b1;
+                waiting_for_passthrough <= 1'b0;
+            end
+        end
+    end
 
 endmodule

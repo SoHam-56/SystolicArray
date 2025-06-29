@@ -246,7 +246,7 @@ module TB_SystolicArray;
             while (!accumulator_valid_o[row][col]) @(posedge clk);
 
             // Read accumulator value
-            actual_value = (col == N-1) ? east_o[row] : dut.systolic_array_inst.data_connections[row][col+1];
+            actual_value = (col == N-1) ? east_o[row] : dut.systolic_array_inst.west_connections[row][col+1];
             valid_flag = accumulator_valid_o[row][col];
 
             select_accumulator[row][col] = 0;
