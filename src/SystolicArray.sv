@@ -13,7 +13,6 @@ module SystolicArray #(
     // Outputs from systolic array
     output logic [DATA_WIDTH-1:0] south_o [0:N-1],
     output logic [DATA_WIDTH-1:0] east_o [0:N-1],
-    output logic passthrough_valid_o [0:N-1][0:N-1],
     output logic accumulator_valid_o [0:N-1][0:N-1],
 
     // Queue status
@@ -26,6 +25,8 @@ module SystolicArray #(
     logic [DATA_WIDTH-1:0] weight_in_north [0:N-1];
     logic [DATA_WIDTH-1:0] data_in_west [0:N-1];
     logic inputs_valid;
+    logic passthrough_valid [0:N-1][0:N-1];
+
     logic select_accumulator [0:N-1][0:N-1];
 
     // Extract edge passthrough_valid signals
@@ -37,8 +38,8 @@ module SystolicArray #(
     
     always_comb begin
         for (int i = 0; i < N; i++) begin
-            top_edge_passthrough_valid[i] = passthrough_valid_o[0][i];  // Extract top edge (row 0) passthrough_valid
-            left_edge_passthrough_valid[i] = passthrough_valid_o[i][0]; // Extract left edge (column 0) passthrough_valid
+            top_edge_passthrough_valid[i] = passthrough_valid[0][i];  // Extract top edge (row 0) passthrough_valid
+            left_edge_passthrough_valid[i] = passthrough_valid[i][0]; // Extract left edge (column 0) passthrough_valid
         end
     end
 
@@ -90,13 +91,10 @@ module SystolicArray #(
         .select_accumulator_i(select_accumulator),
         .south_o(south_o),
         .east_o(east_o),
-        .passthrough_valid_o(passthrough_valid_o),
+        .passthrough_valid_o(passthrough_valid),
         .accumulator_valid_o(accumulator_valid_o),
         .done_o(matrix_mult_complete_o)
     );
-
-    // Matrix multiplication complete
-     // assign matrix_mult_complete_o = north_queue_empty_o && west_queue_empty_o;  // TODO later
 
 endmodule
 

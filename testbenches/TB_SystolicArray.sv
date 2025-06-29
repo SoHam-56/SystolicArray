@@ -24,7 +24,6 @@ module TB_SystolicArray;
 
     wire [DATA_WIDTH-1:0] south_o [0:N-1];
     wire [DATA_WIDTH-1:0] east_o [0:N-1];
-    wire passthrough_valid_o [0:N-1][0:N-1];
     wire accumulator_valid_o [0:N-1][0:N-1];
     wire north_queue_empty_o;
     wire west_queue_empty_o;
@@ -57,7 +56,6 @@ module TB_SystolicArray;
         .start_matrix_mult_i(start_matrix_mult),
         .south_o(south_o),
         .east_o(east_o),
-        .passthrough_valid_o(passthrough_valid_o),
         .accumulator_valid_o(accumulator_valid_o),
         .north_queue_empty_o(north_queue_empty_o),
         .west_queue_empty_o(west_queue_empty_o),
