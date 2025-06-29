@@ -12,6 +12,11 @@ module ColumnInputQueue #(
     input logic start_i,                            // Start signal to begin queue operation
     input logic [N-1:0] passthrough_valid_i,        // passthrough_valid from edge PEs
 
+    // Write interface
+    input logic write_enable_i,                     // Write enable
+    input logic [DATA_WIDTH-1:0] write_data_i,     // Write data
+    input logic write_reset_i,                      // Reset write pointer to 0
+
     // Data outputs to systolic array
     output logic [DATA_WIDTH-1:0] data_o [0:N-1],   // Data outputs to N PEs
     output logic data_valid_o,                      // Valid signal for first PE (generates N pulses)
@@ -26,6 +31,9 @@ module ColumnInputQueue #(
 
     logic [DATA_WIDTH-1:0] sram [0:SRAM_DEPTH-1];
 
+    // Write pointer for sequential writing
+    logic [$clog2(SRAM_DEPTH)-1:0] write_addr;
+
     // Address pointers for each PE
     logic [$clog2(SRAM_DEPTH)-1:0] read_addr [0:N-1];
 
@@ -38,7 +46,7 @@ module ColumnInputQueue #(
     logic first_data_sent;
     logic first_data_pulse;  // Tracks the single pulse for first data
     logic pe0_data_valid;    // tracks when PE[0] gets new valid data
-    
+
     // FIXED: Proper array of counters for each PE
     logic [COUNT_WIDTH-1:0] pe_data_count [0:N-1];  // Count of data sent to each PE
 
@@ -50,6 +58,20 @@ module ColumnInputQueue #(
     initial begin
         if (MEM_FILE != "default.mem") $readmemh(MEM_FILE, sram);
         else for (int i = 0; i < SRAM_DEPTH; i++) sram[i] = '0;
+    end
+
+    // SRAM write logic with auto-incrementing address
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            write_addr <= '0;
+        end else begin
+            if (write_reset_i) begin
+                write_addr <= '0;
+            end else if (write_enable_i && write_addr < SRAM_DEPTH) begin
+                sram[write_addr] <= write_data_i;
+                write_addr <= write_addr + 1'b1;
+            end
+        end
     end
 
     // Reset and initialization logic
@@ -76,11 +98,11 @@ module ColumnInputQueue #(
             pe0_data_valid <= 1'b0;
             for (int i = 0; i < N; i++) begin
                 last_element_read[i] <= '0;  // Clear last element read flags
-                
+
                 // Delay passthrough_valid by 2 cycles
                 passthrough_valid_d1[i] <= passthrough_valid_i[i];
                 passthrough_valid_d2[i] <= passthrough_valid_d1[i];
-                
+
                 // Delay last_element_read by one cycle to generate pulse
                 last_element_read_d1[i] <= last_element_read[i];
             end
