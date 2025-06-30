@@ -8,8 +8,8 @@ module TB_SystolicArray;
 
     // Tolerance configuration
     localparam TOLERANCE_MODE = "RELATIVE"; // "ABSOLUTE", "RELATIVE", or "BOTH"
-    localparam real ABSOLUTE_TOLERANCE = 1.0; // Absolute difference tolerance
-    localparam real RELATIVE_TOLERANCE = 0.10; // 1% relative tolerance
+    localparam real ABSOLUTE_TOLERANCE = 1.0;
+    localparam real RELATIVE_TOLERANCE = 0.10;
     localparam logic ENABLE_TOLERANCE = 1'b1; // Enable/disable tolerance checking
 
     // Test tracking variables
@@ -21,6 +21,14 @@ module TB_SystolicArray;
     reg clk;
     reg rstn;
     reg start_matrix_mult;
+
+    reg north_write_enable;
+    reg [DATA_WIDTH-1:0] north_write_data;
+    reg north_write_reset;
+    
+    reg west_write_enable;
+    reg [DATA_WIDTH-1:0] west_write_data;
+    reg west_write_reset;
 
     wire [DATA_WIDTH-1:0] south_o [0:N-1];
     wire [DATA_WIDTH-1:0] east_o [0:N-1];
@@ -54,6 +62,18 @@ module TB_SystolicArray;
         .clk_i(clk),
         .rstn_i(rstn),
         .start_matrix_mult_i(start_matrix_mult),
+        
+        // North Queue Write interface
+        .north_write_enable_i(north_write_enable),
+        .north_write_data_i(north_write_data),
+        .north_write_reset_i(north_write_reset),
+        
+        // West Queue Write interface
+        .west_write_enable_i(west_write_enable),
+        .west_write_data_i(west_write_data),
+        .west_write_reset_i(west_write_reset),
+        
+        // Outputs
         .south_o(south_o),
         .east_o(east_o),
         .accumulator_valid_o(accumulator_valid_o),
@@ -69,7 +89,6 @@ module TB_SystolicArray;
                 dut.select_accumulator[i][j] = select_accumulator[i][j];
     end
 
-    // Function to check if values are within tolerance
     function automatic logic check_tolerance(
         input [DATA_WIDTH-1:0] expected,
         input [DATA_WIDTH-1:0] actual,
@@ -109,29 +128,24 @@ module TB_SystolicArray;
         endcase
 
         // Generate tolerance info string
-        tolerance_info = $sformatf("AbsDiff=%.3f(%.3f), RelDiff=%.3f%%(%.1f%%)",
-                                  abs_diff, ABSOLUTE_TOLERANCE,
-                                  rel_diff*100.0, RELATIVE_TOLERANCE*100.0);
+        tolerance_info = $sformatf("AbsDiff=%.3f(%.3f), RelDiff=%.3f%%(%.1f%%)", abs_diff, ABSOLUTE_TOLERANCE, rel_diff*100.0, RELATIVE_TOLERANCE*100.0);
 
         return result;
     endfunction
 
-    // Enhanced function for floating-point data (if using floating-point representation)
-    function automatic logic check_fp_tolerance(
-        input [DATA_WIDTH-1:0] expected,
-        input [DATA_WIDTH-1:0] actual,
-        output string tolerance_info
-    );
-        // This function can be customized for IEEE 754 floating-point format
-        // For now, it uses the same logic as check_tolerance
-        return check_tolerance(expected, actual, tolerance_info);
-    endfunction
-
-    // Task to initialize signals
     task initialize_signals();
         begin
             rstn = 0;
             start_matrix_mult = 0;
+            
+            // Initialize write interface signals
+            north_write_enable = 0;
+            north_write_data = 0;
+            north_write_reset = 0;
+            
+            west_write_enable = 0;
+            west_write_data = 0;
+            west_write_reset = 0;
 
             // Initialize select_accumulator
             for (int i = 0; i < N; i++) begin
@@ -147,7 +161,6 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Task to apply reset
     task apply_reset();
         begin
             $display("Applying reset sequence...");
@@ -159,7 +172,84 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Task to load expected results from file
+    task write_file_to_north(input string filename);
+        integer file_handle;
+        integer scan_result;
+        reg [DATA_WIDTH-1:0] temp_data;
+        integer data_count;
+        begin
+            $display("Writing data from file %s to North Queue...", filename);
+
+            file_handle = $fopen(filename, "r");
+            if (file_handle == 0) begin
+                $display("ERROR: Could not open file: %s", filename);
+                $finish;
+            end
+
+            // Reset write pointer
+            north_write_reset = 1;
+            @(posedge clk);
+            north_write_reset = 0;
+            @(posedge clk);
+
+            data_count = 0;
+            // Read and write data sequentially as it appears in the file
+            while (!$feof(file_handle)) begin
+                scan_result = $fscanf(file_handle, "%h", temp_data);
+                if (scan_result == 1) begin
+                    north_write_enable = 1;
+                    north_write_data = temp_data;
+                    @(posedge clk);
+                    data_count++;
+                end
+            end
+
+            north_write_enable = 0;
+            @(posedge clk);
+            $fclose(file_handle);
+            $display("Written %0d values from %s to north queue", data_count, filename);
+        end
+    endtask
+
+    task write_file_to_west(input string filename);
+        integer file_handle;
+        integer scan_result;
+        reg [DATA_WIDTH-1:0] temp_data;
+        integer data_count;
+        begin
+            $display("Writing data from file %s to West Queue...", filename);
+
+            file_handle = $fopen(filename, "r");
+            if (file_handle == 0) begin
+                $display("ERROR: Could not open file: %s", filename);
+                $finish;
+            end
+
+            // Reset write pointer
+            west_write_reset = 1;
+            @(posedge clk);
+            west_write_reset = 0;
+            @(posedge clk);
+
+            data_count = 0;
+            // Read and write data sequentially as it appears in the file
+            while (!$feof(file_handle)) begin
+                scan_result = $fscanf(file_handle, "%h", temp_data);
+                if (scan_result == 1) begin
+                    west_write_enable = 1;
+                    west_write_data = temp_data;
+                    @(posedge clk);
+                    data_count++;
+                end
+            end
+
+            west_write_enable = 0;
+            @(posedge clk);
+            $fclose(file_handle);
+            $display("Written %0d values from %s to west queue", data_count, filename);
+        end
+    endtask
+
     task load_expected_results(input string filename);
         integer file_handle;
         integer scan_result;
@@ -196,7 +286,6 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Task to wait for PE to reach IDLE state
     task wait_for_pe_idle(input integer row, input integer col);
         begin
             // Validate coordinates
@@ -219,7 +308,6 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Enhanced task to verify accumulator with tolerance
     task verify_accumulator(
         input integer row,
         input integer col,
@@ -289,18 +377,15 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Task to execute matrix test
     task execute_matrix_test();
         begin
-            $display("\n=== %s ===", test_name);
+            $display("\n=== %s (File-based) ===", test_name);
             $display("Input A file: %s", INPUT_A_FILE);
             $display("Input B file: %s", INPUT_B_FILE);
             $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
 
-            // Load expected results
             load_expected_results(EXPECTED_OUTPUT_FILE);
 
-            // Apply reset
             apply_reset();
 
             // Start matrix multiplication
@@ -331,7 +416,54 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Enhanced task to print test summary with tolerance information
+    task execute_port_based_matrix_test();
+        begin
+            $display("\n=== %s (Port-based) ===", test_name);
+            $display("Input A file: %s", INPUT_A_FILE);
+            $display("Input B file: %s", INPUT_B_FILE);
+            $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
+
+            load_expected_results(EXPECTED_OUTPUT_FILE);
+
+            apply_reset();
+
+            // Write data files to the input queues
+            fork
+                write_file_to_west(INPUT_A_FILE);
+                write_file_to_north(INPUT_B_FILE);
+            join
+
+            // Wait a few cycles to ensure data is written
+            repeat(10) @(posedge clk);
+
+            // Start matrix multiplication
+            $display("Starting matrix multiplication...");
+            start_matrix_mult = 1;
+            @(posedge clk);
+            start_matrix_mult = 0;
+
+            // Wait for completion
+            $display("Waiting for matrix multiplication to complete...");
+            while (!matrix_mult_complete_o) begin
+                @(posedge clk);
+            end
+            $display("Matrix multiplication completed!");
+
+            // Additional wait for all computations to settle
+            repeat(20) @(posedge clk);
+
+            // Verify all results
+            $display("--- Verifying Results ---");
+            for (int i = 0; i < N; i++) begin
+                for (int j = 0; j < N; j++) begin
+                    verify_accumulator(i, j, $sformatf("PE[%0d][%0d]", i, j), expected_result[i][j], $sformatf("C[%0d][%0d]", i, j));
+                end
+            end
+
+            $display("=== %s COMPLETED ===\n", test_name);
+        end
+    endtask
+
     task print_test_summary();
         automatic real pass_rate = (total_tests > 0) ? (test_pass_count * 100.0) / total_tests : 0.0;
         automatic real tolerance_rate = (test_pass_count > 0) ? (tolerance_pass_count * 100.0) / test_pass_count : 0.0;
@@ -369,7 +501,10 @@ module TB_SystolicArray;
         $display("Testing SystolicArray module with tolerance-based verification\n");
 
         initialize_signals();
-        execute_matrix_test();
+        
+        // execute_matrix_test();
+        execute_port_based_matrix_test();
+        
         repeat(10) @(posedge clk);
 
         print_test_summary();
@@ -379,7 +514,7 @@ module TB_SystolicArray;
     // Timeout
     initial begin
         #10000000;
-        $display("ERROR: Testbench timeout after 1ms!");
+        $display("ERROR: Testbench timeout after 10ms!");
         print_test_summary();
         $finish;
     end

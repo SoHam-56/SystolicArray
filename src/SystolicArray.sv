@@ -129,21 +129,21 @@ module NorthInputQueue #(
     output logic queue_empty_o
 );
     ColumnInputQueue #(
-        .N(N),
-        .DATA_WIDTH(DATA_WIDTH),
-        .MEM_FILE(MEM_FILE)
+        .N                              (N),
+        .DATA_WIDTH                     (DATA_WIDTH),
+        .MEM_FILE                       (MEM_FILE)
     ) north_queue_inst (
-        .clk_i(clk_i),
-        .rstn_i(rstn_i),
-        .start_i(start_i),
-        .passthrough_valid_i(top_edge_passthrough_valid_i),
-        .write_enable_i(write_enable_i),
-        .write_data_i(write_data_i),
-        .write_reset_i(write_reset_i),
-        .data_o(weight_out_north),
-        .data_valid_o(),
-        .last_o(last_o),
-        .queue_empty_o(queue_empty_o)
+        .clk_i                          (clk_i),
+        .rstn_i                         (rstn_i),
+        .start_i                        (start_i),
+        .passthrough_valid_i            (top_edge_passthrough_valid_i),
+        .write_enable_i                 (write_enable_i),
+        .write_data_i                   (write_data_i),
+        .write_reset_i                  (write_reset_i),
+        .data_o                         (weight_out_north),
+        .data_valid_o                   (),
+        .last_o                         (last_o),
+        .queue_empty_o                  (queue_empty_o)
     );
 endmodule
 
@@ -169,20 +169,20 @@ module WestInputQueue #(
     output logic queue_empty_o
 );
     RowInputQueue #(
-        .N(N),
-        .DATA_WIDTH(DATA_WIDTH),
-        .MEM_FILE(MEM_FILE)
+        .N                              (N),
+        .DATA_WIDTH                     (DATA_WIDTH),
+        .MEM_FILE                       (MEM_FILE)
     ) west_queue_inst (
-        .clk_i(clk_i),
-        .rstn_i(rstn_i),
-        .start_i(start_i),
-        .passthrough_valid_i(left_edge_passthrough_valid_i),
-        .write_enable_i(write_enable_i),
-        .write_data_i(write_data_i),
-        .write_reset_i(write_reset_i),
-        .data_o(data_out_west),
-        .data_valid_o(inputs_valid_o),
-        .last_o(last_o),
-        .queue_empty_o(queue_empty_o)
+        .clk_i                          (clk_i),
+        .rstn_i                         (rstn_i),
+        .start_i                        (start_i),
+        .passthrough_valid_i            (left_edge_passthrough_valid_i),
+        .write_enable_i                 (write_enable_i),
+        .write_data_i                   (write_data_i),
+        .write_reset_i                  (write_reset_i),
+        .data_o                         (data_out_west),
+        .data_valid_o                   (inputs_valid_o),
+        .last_o                         (last_o),
+        .queue_empty_o                  (queue_empty_o)
     );
 endmodule

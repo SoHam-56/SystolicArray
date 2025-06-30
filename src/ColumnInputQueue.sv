@@ -47,7 +47,6 @@ module ColumnInputQueue #(
     logic first_data_pulse;  // Tracks the single pulse for first data
     logic pe0_data_valid;    // tracks when PE[0] gets new valid data
 
-    // FIXED: Proper array of counters for each PE
     logic [COUNT_WIDTH-1:0] pe_data_count [0:N-1];  // Count of data sent to each PE
 
     // Last signal generation
