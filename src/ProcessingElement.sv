@@ -14,14 +14,16 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
 
         // Control signal for accumulator output selection
         input wire select_accumulator_i,          // 1: output accumulator, 0: output data passthrough
+        
+        // NEW: Drain mode control signal
+        input wire drain_mode_i,                  // 1: drain mode (bypass MAC), 0: normal mode
 
         // Data outputs to neighboring PEs
         output reg [DATA_WIDTH - 1:0] south_o,    // Pass data to south PE
         output reg [DATA_WIDTH - 1:0] east_o,     // Muxed: data passthrough OR accumulator output
 
         // Control outputs
-        output reg passthrough_valid_o,           // Valid for south_o and east_o (passthrough mode)
-        output reg accumulator_valid_o,           // Valid for east_o when in accumulator mode
+        output reg passthrough_valid_o,           // Unified valid for east_o (passthrough OR accumulator mode)
         output reg last_element_east_o
     );
 
@@ -41,11 +43,12 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
     wire last_element_pulse;
     assign last_element_pulse = mac_done & last_element_captured;
 
-    typedef enum reg [1:0] {
-        IDLE = 2'b00,
-        LOAD_DATA = 2'b01,
-        MAC_COMPUTE = 2'b10,
-        OUTPUT = 2'b11
+    typedef enum reg [2:0] {
+        IDLE = 3'b000,
+        LOAD_DATA = 3'b001,
+        MAC_COMPUTE = 3'b010,
+        OUTPUT = 3'b011,
+        DRAIN_OUTPUT = 3'b100      // NEW: Drain mode output state
     } state_t;
 
     state_t current_state, next_state;
@@ -63,10 +66,17 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
     always @(*) begin
         case (current_state)
             IDLE: begin
-                if (inputs_valid_i)
-                    next_state = LOAD_DATA;
-                else
+                if (inputs_valid_i) begin
+                    if (drain_mode_i) begin
+                        // In drain mode, go directly to DRAIN_OUTPUT to pass through data
+                        next_state = DRAIN_OUTPUT;
+                    end else begin
+                        // Normal mode: go to LOAD_DATA for MAC operation
+                        next_state = LOAD_DATA;
+                    end
+                end else begin
                     next_state = IDLE;
+                end
             end
             LOAD_DATA: begin
                 next_state = MAC_COMPUTE;
@@ -78,6 +88,10 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
                     next_state = MAC_COMPUTE;
             end
             OUTPUT: begin
+                next_state = IDLE;
+            end
+            DRAIN_OUTPUT: begin
+                // NEW: Drain mode output state - go back to IDLE after one cycle
                 next_state = IDLE;
             end
             default: next_state = IDLE;
@@ -111,21 +125,20 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
             buffered_accumulator <= {DATA_WIDTH{1'b0}};
 
             passthrough_valid_o <= 1'b0;
-            accumulator_valid_o <= 1'b0;
             mac_start <= 1'b0;
+            last_element_east_o <= 1'b0;
         end else begin
             case (current_state)
                 IDLE: begin
                     mac_start <= 1'b0;
-                    passthrough_valid_o <= 1'b0;
                     last_element_east_o <= 1'b0;
 
                     // Handle accumulator draining in IDLE state
                     if (select_accumulator_gated) begin
                         east_o <= buffered_accumulator;
-                        accumulator_valid_o <= 1'b1;
+                        passthrough_valid_o <= 1'b1;  // Use unified valid signal
                     end else begin
-                        accumulator_valid_o <= 1'b0;
+                        passthrough_valid_o <= 1'b0;
                     end
                 end
 
@@ -138,7 +151,6 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
                     // Start MAC operation
                     mac_start <= 1'b1;
                     passthrough_valid_o <= 1'b0;
-                    accumulator_valid_o <= 1'b0;
                     last_element_east_o <= 1'b0;
                 end
 
@@ -146,7 +158,6 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
                     // Clear start signal after one cycle
                     mac_start <= 1'b0;
                     passthrough_valid_o <= 1'b0;
-                    accumulator_valid_o <= 1'b0;
                     last_element_east_o <= 1'b0;
 
                     // Buffer the MAC result and generate last_element pulse when MAC is done
@@ -159,8 +170,16 @@ module ProcessingElement #(parameter DATA_WIDTH = 32)
                 OUTPUT: begin
                     south_o <= buffered_north;
                     east_o <= buffered_west;
+                    passthrough_valid_o <= 1'b1;  // Use unified valid signal
+                    last_element_east_o <= 1'b0;
+                end
+
+                DRAIN_OUTPUT: begin
+                    // NEW: Drain mode output state
+                    // Pass through current inputs directly without MAC operation
+                    south_o <= north_i;
+                    east_o <= west_i;
                     passthrough_valid_o <= 1'b1;
-                    accumulator_valid_o <= 1'b0;
                     last_element_east_o <= 1'b0;
                 end
             endcase

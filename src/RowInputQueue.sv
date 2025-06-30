@@ -37,7 +37,7 @@ module RowInputQueue #(
     // Address pointers for each PE
     logic [$clog2(SRAM_DEPTH)-1:0] read_addr [0:N-1];
 
-    // Passthrough valid delay registers (2 cycle delay as specified)
+    // Passthrough valid delay registers
     logic passthrough_valid_d1 [0:N-1];
     logic passthrough_valid_d2 [0:N-1];
 
@@ -47,7 +47,6 @@ module RowInputQueue #(
     logic first_data_pulse;  // Tracks the single pulse for first data
     logic pe0_data_valid;    // tracks when PE[0] gets new valid data
 
-    // FIXED: Proper array of counters for each PE
     logic [COUNT_WIDTH-1:0] pe_data_count [0:N-1];  // Count of data sent to each PE
 
     // Last signal generation

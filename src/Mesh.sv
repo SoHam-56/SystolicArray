@@ -26,7 +26,6 @@ module Mesh #(
 
     // Status outputs for each PE
     output wire passthrough_valid_o [0:N-1][0:N-1],
-    output wire accumulator_valid_o [0:N-1][0:N-1],
     output reg done_o,
 
     // Last element output (right column - East boundary) for bottom row
@@ -49,6 +48,23 @@ module Mesh #(
     reg last_element_seen;
     reg waiting_for_passthrough;
 
+    // Drain mode logic
+    reg drain_mode;
+    reg [31:0] drain_step_counter;  // Counts steps 0 to N-1 for each column
+    
+    // Internal select_accumulator signal
+    wire select_accumulator_internal [0:N-1][0:N-1];
+
+    // Drain state machine
+    typedef enum logic [1:0] {
+        DRAIN_IDLE,
+        DRAIN_PULSE,
+        DRAIN_WAIT,
+        DRAIN_COMPLETE
+    } drain_state_t;
+    
+    drain_state_t drain_state;
+
     genvar row, col;
     generate
         for (row = 0; row < N; row = row + 1) begin : gen_row
@@ -62,11 +78,11 @@ module Mesh #(
                     .west_i(west_connections[row][col]),
                     .inputs_valid_i(inputs_valid_internal[row][col]),
                     .last_element_i(last_element_horizontal[row][col]),
-                    .select_accumulator_i(select_accumulator_i[row][col]),
+                    .select_accumulator_i(select_accumulator_internal[row][col]),
+                    .drain_mode_i(drain_mode),
                     .south_o(north_connections[row+1][col]),
                     .east_o(west_connections[row][col+1]),
                     .passthrough_valid_o(passthrough_valid_o[row][col]),
-                    .accumulator_valid_o(accumulator_valid_o[row][col]),
                     .last_element_east_o(last_element_horizontal[row][col+1])
                 );
             end
@@ -109,7 +125,83 @@ module Mesh #(
         end
     endgenerate
 
+    // Drain mode control logic - generate pulses and wait for data propagation
+    reg data_collected;  // Flag to track when data has been collected from rightmost column
+    
+    always @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            drain_mode <= 1'b0;
+            drain_step_counter <= 0;
+            drain_state <= DRAIN_IDLE;
+            data_collected <= 1'b0;
+        end else begin
+            case (drain_state)
+                DRAIN_IDLE: begin
+                    if (done_o && !drain_mode) begin
+                        // Enter drain mode after matrix multiplication is done
+                        drain_mode <= 1'b1;
+                        drain_step_counter <= 0;
+                        drain_state <= DRAIN_PULSE;
+                        data_collected <= 1'b0;
+                    end
+                end
+                
+                DRAIN_PULSE: begin
+                    // Generate select_accumulator pulse for current column
+                    // Pulse is generated for one clock cycle, then move to wait state
+                    drain_state <= DRAIN_WAIT;
+                    data_collected <= 1'b0;  // Reset data collection flag
+                end
+                
+                DRAIN_WAIT: begin
+                    // Wait for data from current column to propagate and appear at rightmost PEs
+                    logic any_rightmost_valid;
+                    any_rightmost_valid = 1'b0;
+                    for (int i = 0; i < N; i++) begin
+                        if (passthrough_valid_o[i][N-1]) begin
+                            any_rightmost_valid = 1'b1;
+                        end
+                    end
+                    
+                    // Track when data appears at the rightmost column
+                    if (any_rightmost_valid && !data_collected) begin
+                        data_collected <= 1'b1;
+                    end
+                    
+                    // Move to next column only after data has been collected and is no longer valid
+                    // This ensures the external system has had time to capture the data
+                    if (data_collected && !any_rightmost_valid) begin
+                        // Data has been collected and is no longer present, move to next column
+                        if (drain_step_counter < N-1) begin
+                            drain_step_counter <= drain_step_counter + 1;
+                            drain_state <= DRAIN_PULSE;  // Generate pulse for next column
+                        end else begin
+                            // All columns drained
+                            drain_state <= DRAIN_COMPLETE;
+                        end
+                    end
+                end
+                
+                DRAIN_COMPLETE: begin
+                    // Stay in this state - drain is complete
+                end
+            endcase
+        end
+    end
+
+    // Generate select_accumulator pulses: Only active during DRAIN_PULSE state
+    generate
+        for (row = 0; row < N; row = row + 1) begin : gen_select_mux_row
+            for (col = 0; col < N; col = col + 1) begin : gen_select_mux_col
+                assign select_accumulator_internal[row][col] = drain_mode ? 
+                    (drain_state == DRAIN_PULSE && col == drain_step_counter) : 
+                    select_accumulator_i[row][col];
+            end
+        end
+    endgenerate
+
     // Connect inputs_valid signals following systolic flow pattern
+    // During drain mode, PEs will use drain_mode_i to bypass MAC operations
     generate
         for (row = 0; row < N; row = row + 1) begin : gen_valid_row
             for (col = 0; col < N; col = col + 1) begin : gen_valid_col
@@ -140,16 +232,18 @@ module Mesh #(
             waiting_for_passthrough <= 1'b0;
             done_o <= 1'b0;
         end else begin
-            // Step 1: Detect last_element_east_o pulse from bottom-right PE
-            if (last_element_horizontal[N-1][N] && !last_element_seen) begin
-                last_element_seen <= 1'b1;
-                waiting_for_passthrough <= 1'b1;
-            end
-            
-            // Step 2: After seeing last_element, wait for passthrough_valid_o pulse
-            if (waiting_for_passthrough && passthrough_valid_o[N-1][N-1]) begin
-                done_o <= 1'b1;
-                waiting_for_passthrough <= 1'b0;
+            if (!drain_mode) begin
+                // Step 1: Detect last_element_east_o pulse from bottom-right PE
+                if (last_element_horizontal[N-1][N] && !last_element_seen) begin
+                    last_element_seen <= 1'b1;
+                    waiting_for_passthrough <= 1'b1;
+                end
+                
+                // Step 2: After seeing last_element, wait for passthrough_valid_o pulse
+                if (waiting_for_passthrough && passthrough_valid_o[N-1][N-1]) begin
+                    done_o <= 1'b1;
+                    waiting_for_passthrough <= 1'b0;
+                end
             end
         end
     end

@@ -23,12 +23,17 @@ module SystolicArray #(
     // Outputs from systolic array
     output logic [DATA_WIDTH-1:0] south_o [0:N-1],
     output logic [DATA_WIDTH-1:0] east_o [0:N-1],
-    output logic                  accumulator_valid_o [0:N-1][0:N-1],
+    output logic                  passthrough_valid_o [0:N-1][0:N-1],  // Updated: unified valid signal
 
     // Queue status
     output logic                  north_queue_empty_o,
     output logic                  west_queue_empty_o,
-    output logic                  matrix_mult_complete_o
+    output logic                  matrix_mult_complete_o,
+
+    // Drain mode outputs
+    output logic                  drain_complete_o,
+    output logic [DATA_WIDTH-1:0] drain_data_o,
+    output logic                  drain_valid_o
 );
     // Internal signals
     logic [DATA_WIDTH-1:0] weight_in_north [0:N-1];
@@ -84,6 +89,7 @@ module SystolicArray #(
         .queue_empty_o                  (west_queue_empty_o)
     );
 
+    // select_accumulator is now managed internally by the Mesh module
     always_comb begin
         for (int i = 0; i < N; i++)
             for (int j = 0; j < N; j++) select_accumulator[i][j] = 1'b0;
@@ -103,9 +109,19 @@ module SystolicArray #(
         .south_o                        (south_o),
         .east_o                         (east_o),
         .passthrough_valid_o            (passthrough_valid),
-        .accumulator_valid_o            (accumulator_valid_o),
-        .done_o                         (matrix_mult_complete_o)
+        .done_o                         (matrix_mult_complete_o),
+        .last_element_east_o            ()  // Not used at top level
     );
+
+    // Connect internal passthrough_valid to output
+    assign passthrough_valid_o = passthrough_valid;
+
+    // Drain data collection from east outputs
+    // During drain mode, accumulator data flows through east_o with passthrough_valid_o
+    assign drain_complete_o = 1'b0;  // User can determine completion by monitoring east_o
+    assign drain_data_o = east_o[0]; // Collect from top row east output
+    assign drain_valid_o = passthrough_valid_o[0][N-1]; // Use passthrough_valid from top-right PE
+
 endmodule
 
 // Wrapper module for North Input Queue
@@ -129,21 +145,21 @@ module NorthInputQueue #(
     output logic queue_empty_o
 );
     ColumnInputQueue #(
-        .N(N),
-        .DATA_WIDTH(DATA_WIDTH),
-        .MEM_FILE(MEM_FILE)
+        .N                              (N),
+        .DATA_WIDTH                     (DATA_WIDTH),
+        .MEM_FILE                       (MEM_FILE)
     ) north_queue_inst (
-        .clk_i(clk_i),
-        .rstn_i(rstn_i),
-        .start_i(start_i),
-        .passthrough_valid_i(top_edge_passthrough_valid_i),
-        .write_enable_i(write_enable_i),
-        .write_data_i(write_data_i),
-        .write_reset_i(write_reset_i),
-        .data_o(weight_out_north),
-        .data_valid_o(),
-        .last_o(last_o),
-        .queue_empty_o(queue_empty_o)
+        .clk_i                          (clk_i),
+        .rstn_i                         (rstn_i),
+        .start_i                        (start_i),
+        .passthrough_valid_i            (top_edge_passthrough_valid_i),
+        .write_enable_i                 (write_enable_i),
+        .write_data_i                   (write_data_i),
+        .write_reset_i                  (write_reset_i),
+        .data_o                         (weight_out_north),
+        .data_valid_o                   (),
+        .last_o                         (last_o),
+        .queue_empty_o                  (queue_empty_o)
     );
 endmodule
 
@@ -169,20 +185,20 @@ module WestInputQueue #(
     output logic queue_empty_o
 );
     RowInputQueue #(
-        .N(N),
-        .DATA_WIDTH(DATA_WIDTH),
-        .MEM_FILE(MEM_FILE)
+        .N                              (N),
+        .DATA_WIDTH                     (DATA_WIDTH),
+        .MEM_FILE                       (MEM_FILE)
     ) west_queue_inst (
-        .clk_i(clk_i),
-        .rstn_i(rstn_i),
-        .start_i(start_i),
-        .passthrough_valid_i(left_edge_passthrough_valid_i),
-        .write_enable_i(write_enable_i),
-        .write_data_i(write_data_i),
-        .write_reset_i(write_reset_i),
-        .data_o(data_out_west),
-        .data_valid_o(inputs_valid_o),
-        .last_o(last_o),
-        .queue_empty_o(queue_empty_o)
+        .clk_i                          (clk_i),
+        .rstn_i                         (rstn_i),
+        .start_i                        (start_i),
+        .passthrough_valid_i            (left_edge_passthrough_valid_i),
+        .write_enable_i                 (write_enable_i),
+        .write_data_i                   (write_data_i),
+        .write_reset_i                  (write_reset_i),
+        .data_o                         (data_out_west),
+        .data_valid_o                   (inputs_valid_o),
+        .last_o                         (last_o),
+        .queue_empty_o                  (queue_empty_o)
     );
 endmodule

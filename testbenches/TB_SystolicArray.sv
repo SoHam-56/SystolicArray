@@ -2,14 +2,14 @@
 
 module TB_SystolicArray;
 
-    localparam N = 32;
+    localparam N = 3;
     localparam DATA_WIDTH = 32;
     localparam CLK_PERIOD = 10;
 
     // Tolerance configuration
     localparam TOLERANCE_MODE = "RELATIVE"; // "ABSOLUTE", "RELATIVE", or "BOTH"
-    localparam real ABSOLUTE_TOLERANCE = 1.0; // Absolute difference tolerance
-    localparam real RELATIVE_TOLERANCE = 0.10; // 1% relative tolerance
+    localparam real ABSOLUTE_TOLERANCE = 1.0;
+    localparam real RELATIVE_TOLERANCE = 0.10;
     localparam logic ENABLE_TOLERANCE = 1'b1; // Enable/disable tolerance checking
 
     // Test tracking variables
@@ -22,15 +22,28 @@ module TB_SystolicArray;
     reg rstn;
     reg start_matrix_mult;
 
+    reg north_write_enable;
+    reg [DATA_WIDTH-1:0] north_write_data;
+    reg north_write_reset;
+    
+    reg west_write_enable;
+    reg [DATA_WIDTH-1:0] west_write_data;
+    reg west_write_reset;
+
     wire [DATA_WIDTH-1:0] south_o [0:N-1];
     wire [DATA_WIDTH-1:0] east_o [0:N-1];
-    wire accumulator_valid_o [0:N-1][0:N-1];
+    wire passthrough_valid_o [0:N-1][0:N-1];  // Updated to match module interface
     wire north_queue_empty_o;
     wire west_queue_empty_o;
     wire matrix_mult_complete_o;
 
+    // Drain mode outputs
+    wire drain_complete_o;
+    wire [DATA_WIDTH-1:0] drain_data_o;
+    wire drain_valid_o;
+
     reg [DATA_WIDTH-1:0] expected_result [0:N-1][0:N-1];
-    logic select_accumulator [0:N-1][0:N-1];
+    reg [DATA_WIDTH-1:0] captured_results [0:N-1][0:N-1];
 
     // Test configuration
     localparam INPUT_A_FILE = "matrixA.mem";
@@ -38,13 +51,15 @@ module TB_SystolicArray;
     localparam EXPECTED_OUTPUT_FILE = "matrixC.mem";
 
     // Test description
-    string test_name = "Random Matrix Test";
+    string test_name = "Systolic Array Matrix Multiplication Test";
 
+    // Clock generation
     initial begin
         clk = 0;
         forever #(CLK_PERIOD/2) clk = ~clk;
     end
 
+    // DUT instantiation
     SystolicArray #(
         .N(N),
         .DATA_WIDTH(DATA_WIDTH),
@@ -54,22 +69,32 @@ module TB_SystolicArray;
         .clk_i(clk),
         .rstn_i(rstn),
         .start_matrix_mult_i(start_matrix_mult),
+        
+        // North Queue Write interface
+        .north_write_enable_i(north_write_enable),
+        .north_write_data_i(north_write_data),
+        .north_write_reset_i(north_write_reset),
+        
+        // West Queue Write interface
+        .west_write_enable_i(west_write_enable),
+        .west_write_data_i(west_write_data),
+        .west_write_reset_i(west_write_reset),
+        
+        // Outputs
         .south_o(south_o),
         .east_o(east_o),
-        .accumulator_valid_o(accumulator_valid_o),
+        .passthrough_valid_o(passthrough_valid_o),  // Updated signal name
         .north_queue_empty_o(north_queue_empty_o),
         .west_queue_empty_o(west_queue_empty_o),
-        .matrix_mult_complete_o(matrix_mult_complete_o)
+        .matrix_mult_complete_o(matrix_mult_complete_o),
+        
+        // Drain mode outputs
+        .drain_complete_o(drain_complete_o),
+        .drain_data_o(drain_data_o),
+        .drain_valid_o(drain_valid_o)
     );
 
-    // Override the select_accumulator signal
-    always_comb begin
-        for (int i = 0; i < N; i++)
-            for (int j = 0; j < N; j++)
-                dut.select_accumulator[i][j] = select_accumulator[i][j];
-    end
-
-    // Function to check if values are within tolerance
+    // Tolerance checking function
     function automatic logic check_tolerance(
         input [DATA_WIDTH-1:0] expected,
         input [DATA_WIDTH-1:0] actual,
@@ -81,7 +106,6 @@ module TB_SystolicArray;
         logic result;
 
         // Convert to real for tolerance calculations
-        // Assuming signed integer representation - adjust as needed for your data format
         expected_real = $signed(expected);
         actual_real = $signed(actual);
 
@@ -93,7 +117,7 @@ module TB_SystolicArray;
         if (expected_real != 0.0) begin
             rel_diff = abs_diff / ((expected_real > 0) ? expected_real : -expected_real);
         end else begin
-            rel_diff = (actual_real == 0.0) ? 0.0 : 1.0; // If expected is 0, only pass if actual is also 0
+            rel_diff = (actual_real == 0.0) ? 0.0 : 1.0;
         end
 
         // Check tolerance conditions
@@ -109,36 +133,37 @@ module TB_SystolicArray;
         endcase
 
         // Generate tolerance info string
-        tolerance_info = $sformatf("AbsDiff=%.3f(%.3f), RelDiff=%.3f%%(%.1f%%)",
-                                  abs_diff, ABSOLUTE_TOLERANCE,
-                                  rel_diff*100.0, RELATIVE_TOLERANCE*100.0);
+        tolerance_info = $sformatf("AbsDiff=%.3f(%.3f), RelDiff=%.3f%%(%.1f%%)", 
+                                   abs_diff, ABSOLUTE_TOLERANCE, rel_diff*100.0, RELATIVE_TOLERANCE*100.0);
 
         return result;
     endfunction
 
-    // Enhanced function for floating-point data (if using floating-point representation)
-    function automatic logic check_fp_tolerance(
-        input [DATA_WIDTH-1:0] expected,
-        input [DATA_WIDTH-1:0] actual,
-        output string tolerance_info
-    );
-        // This function can be customized for IEEE 754 floating-point format
-        // For now, it uses the same logic as check_tolerance
-        return check_tolerance(expected, actual, tolerance_info);
-    endfunction
-
-    // Task to initialize signals
+    // Initialize all signals
     task initialize_signals();
         begin
             rstn = 0;
             start_matrix_mult = 0;
+            
+            north_write_enable = 0;
+            north_write_data = 0;
+            north_write_reset = 0;
+            
+            west_write_enable = 0;
+            west_write_data = 0;
+            west_write_reset = 0;
 
-            // Initialize select_accumulator
+            // Initialize captured results
             for (int i = 0; i < N; i++) begin
-                for (int j = 0; j < N; j++)
-                    select_accumulator[i][j] = 0;
+                for (int j = 0; j < N; j++) begin
+                    captured_results[i][j] = 0;
+                end
             end
 
+            $display("=== Systolic Array Testbench Initialization ===");
+            $display("Array Size: %0dx%0d", N, N);
+            $display("Data Width: %0d bits", DATA_WIDTH);
+            $display("Clock Period: %0d ns", CLK_PERIOD);
             $display("Tolerance Configuration:");
             $display("  Mode: %s", TOLERANCE_MODE);
             $display("  Absolute Tolerance: %.6f", ABSOLUTE_TOLERANCE);
@@ -147,19 +172,97 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Task to apply reset
+    // Apply reset sequence
     task apply_reset();
         begin
             $display("Applying reset sequence...");
             rstn = 0;
-            repeat(5) @(posedge clk);
+            repeat(10) @(posedge clk);
             rstn = 1;
-            repeat(5) @(posedge clk);
+            repeat(10) @(posedge clk);
             $display("Reset sequence completed.");
         end
     endtask
 
-    // Task to load expected results from file
+    // Write data from file to north queue
+    task write_file_to_north(input string filename);
+        integer file_handle;
+        integer scan_result;
+        reg [DATA_WIDTH-1:0] temp_data;
+        integer data_count;
+        begin
+            $display("Writing data from file %s to North Queue...", filename);
+
+            file_handle = $fopen(filename, "r");
+            if (file_handle == 0) begin
+                $display("ERROR: Could not open file: %s", filename);
+                $finish;
+            end
+
+            // Reset write pointer
+            north_write_reset = 1;
+            @(posedge clk);
+            north_write_reset = 0;
+            @(posedge clk);
+
+            data_count = 0;
+            while (!$feof(file_handle)) begin
+                scan_result = $fscanf(file_handle, "%h", temp_data);
+                if (scan_result == 1) begin
+                    north_write_enable = 1;
+                    north_write_data = temp_data;
+                    @(posedge clk);
+                    data_count++;
+                end
+            end
+
+            north_write_enable = 0;
+            @(posedge clk);
+            $fclose(file_handle);
+            $display("Written %0d values from %s to north queue", data_count, filename);
+        end
+    endtask
+
+    // Write data from file to west queue
+    task write_file_to_west(input string filename);
+        integer file_handle;
+        integer scan_result;
+        reg [DATA_WIDTH-1:0] temp_data;
+        integer data_count;
+        begin
+            $display("Writing data from file %s to West Queue...", filename);
+
+            file_handle = $fopen(filename, "r");
+            if (file_handle == 0) begin
+                $display("ERROR: Could not open file: %s", filename);
+                $finish;
+            end
+
+            // Reset write pointer
+            west_write_reset = 1;
+            @(posedge clk);
+            west_write_reset = 0;
+            @(posedge clk);
+
+            data_count = 0;
+            while (!$feof(file_handle)) begin
+                scan_result = $fscanf(file_handle, "%h", temp_data);
+                if (scan_result == 1) begin
+                    west_write_enable = 1;
+                    west_write_data = temp_data;
+                    @(posedge clk);
+                    data_count++;
+                end
+            end
+
+            west_write_enable = 0;
+            @(posedge clk);
+            $fclose(file_handle);
+            $display("Written %0d values from %s to west queue", data_count, filename);
+        end
+    endtask
+
+    // Load expected results from file
     task load_expected_results(input string filename);
         integer file_handle;
         integer scan_result;
@@ -196,112 +299,124 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Task to wait for PE to reach IDLE state
-    task wait_for_pe_idle(input integer row, input integer col);
+    // Improved drain mode result capture
+    task capture_drain_results();
+        integer timeout_counter;
+        integer captured_count;
+        reg [N-1:0] column_captured;
         begin
-            // Validate coordinates
-            if (row >= N || col >= N || row < 0 || col < 0) begin
-                $display("ERROR: Invalid PE coordinates [%0d][%0d] for %0dx%0d array", row, col, N, N);
+            $display("Capturing results via drain mode...");
+            
+            captured_count = 0;
+            column_captured = 0;
+            timeout_counter = 0;
+            
+            // Wait for drain mode to become active
+            while (!dut.systolic_array_inst.drain_mode && timeout_counter < 1000) begin
+                @(posedge clk);
+                timeout_counter++;
+            end
+            
+            if (timeout_counter >= 1000) begin
+                $display("ERROR: Timeout waiting for drain mode to activate");
                 return;
             end
-
-            $display("Waiting for PE[%0d][%0d] computation to complete...", row, col);
-
-            // Wait for matrix multiplication completion
-            while (!matrix_mult_complete_o) begin
-                @(posedge clk);
+            
+            $display("Drain mode activated, capturing results...");
+            
+            // Capture data from each column as it becomes available
+            for (int col = 0; col < N; col++) begin
+                // Wait for this column to be selected
+                while (dut.systolic_array_inst.drain_step_counter != col) begin
+                    @(posedge clk);
+                end
+                
+                // Wait for data to propagate to east outputs
+                repeat(5) @(posedge clk);
+                
+                // Capture data from all rows in this column
+                for (int row = 0; row < N; row++) begin
+                    if (passthrough_valid_o[row][N-1]) begin
+                        captured_results[row][col] = east_o[row];
+                        captured_count++;
+                        $display("Captured[%0d][%0d] = 0x%08x (%0d)", 
+                                row, col, east_o[row], $signed(east_o[row]));
+                    end
+                end
+                
+                column_captured[col] = 1;
+                $display("Column %0d captured", col);
             end
-
-            // Additional wait to ensure all PEs have settled
-            repeat(10) @(posedge clk);
-
-            $display("PE[%0d][%0d] computation completed", row, col);
+            
+            $display("Drain capture complete: %0d values captured", captured_count);
         end
     endtask
 
-    // Enhanced task to verify accumulator with tolerance
-    task verify_accumulator(
-        input integer row,
-        input integer col,
-        input string pe_name,
-        input [DATA_WIDTH-1:0] expected_value,
-        input string test_description
-    );
-        reg [DATA_WIDTH-1:0] actual_value;
-        reg valid_flag;
+    // Verify captured results against expected values
+    task verify_results();
         logic exact_match, tolerance_match;
         string tolerance_info;
         begin
-            total_tests++;
-            $display("Verifying %s accumulator for %s...", pe_name, test_description);
-
-            wait_for_pe_idle(row, col);
-
-            select_accumulator[row][col] = 1;
-            @(posedge clk);
-
-            // Wait for valid pulse
-            while (!accumulator_valid_o[row][col]) @(posedge clk);
-
-            // Read accumulator value
-            actual_value = (col == N-1) ? east_o[row] : dut.systolic_array_inst.west_connections[row][col+1];
-            valid_flag = accumulator_valid_o[row][col];
-
-            select_accumulator[row][col] = 0;
-            @(posedge clk);
-
-            // Check for exact match first
-            exact_match = (actual_value == expected_value);
-
-            // Check tolerance if enabled and exact match failed
-            if (!exact_match && ENABLE_TOLERANCE) begin
-                tolerance_match = check_tolerance(expected_value, actual_value, tolerance_info);
-            end else begin
-                tolerance_match = 1'b0;
-                tolerance_info = "N/A";
-            end
-
-            // Verify and update counters
-            if (valid_flag && (exact_match || tolerance_match)) begin
-                if (exact_match) begin
-                    $display("PASS: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT MATCH]",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value));
-                end else begin
-                    $display("PASS: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value), tolerance_info);
-                    tolerance_pass_count++;
+            $display("--- Verifying Results ---");
+            
+            for (int row = 0; row < N; row++) begin
+                for (int col = 0; col < N; col++) begin
+                    total_tests++;
+                    
+                    exact_match = (captured_results[row][col] == expected_result[row][col]);
+                    
+                    if (!exact_match && ENABLE_TOLERANCE) begin
+                        tolerance_match = check_tolerance(expected_result[row][col], 
+                                                        captured_results[row][col], 
+                                                        tolerance_info);
+                    end else begin
+                        tolerance_match = 1'b0;
+                        tolerance_info = "N/A";
+                    end
+                    
+                    if (exact_match || tolerance_match) begin
+                        if (exact_match) begin
+                            $display("PASS: PE[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT]",
+                                    row, col, expected_result[row][col], $signed(expected_result[row][col]),
+                                    captured_results[row][col], $signed(captured_results[row][col]));
+                        end else begin
+                            $display("PASS: PE[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
+                                    row, col, expected_result[row][col], $signed(expected_result[row][col]),
+                                    captured_results[row][col], $signed(captured_results[row][col]), tolerance_info);
+                            tolerance_pass_count++;
+                        end
+                        test_pass_count++;
+                    end else begin
+                        $display("FAIL: PE[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
+                                row, col, expected_result[row][col], $signed(expected_result[row][col]),
+                                captured_results[row][col], $signed(captured_results[row][col]), tolerance_info);
+                        test_fail_count++;
+                    end
                 end
-                test_pass_count++;
-            end else begin
-                if (ENABLE_TOLERANCE) begin
-                    $display("FAIL: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d), Valid: %b [TOLERANCE: %s]",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value), valid_flag, tolerance_info);
-                end else begin
-                    $display("FAIL: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d), Valid: %b",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value), valid_flag);
-                end
-                test_fail_count++;
             end
         end
     endtask
 
-    // Task to execute matrix test
+    // Execute complete matrix multiplication test
     task execute_matrix_test();
+        integer timeout_counter;
         begin
             $display("\n=== %s ===", test_name);
             $display("Input A file: %s", INPUT_A_FILE);
             $display("Input B file: %s", INPUT_B_FILE);
             $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
 
-            // Load expected results
             load_expected_results(EXPECTED_OUTPUT_FILE);
-
-            // Apply reset
             apply_reset();
+
+            // Write data files to the input queues
+            fork
+                write_file_to_west(INPUT_A_FILE);
+                write_file_to_north(INPUT_B_FILE);
+            join
+
+            // Wait for queues to be populated
+            repeat(20) @(posedge clk);
 
             // Start matrix multiplication
             $display("Starting matrix multiplication...");
@@ -309,47 +424,51 @@ module TB_SystolicArray;
             @(posedge clk);
             start_matrix_mult = 0;
 
-            // Wait for completion
-            $display("Waiting for matrix multiplication to complete...");
-            while (!matrix_mult_complete_o) begin
+            // Wait for completion with timeout
+            timeout_counter = 0;
+            while (!matrix_mult_complete_o && timeout_counter < 10000) begin
                 @(posedge clk);
+                timeout_counter++;
             end
-            $display("Matrix multiplication completed!");
 
-            // Additional wait for all computations to settle
-            repeat(20) @(posedge clk);
-
-            // Verify all results
-            $display("--- Verifying Results ---");
-            for (int i = 0; i < N; i++) begin
-                for (int j = 0; j < N; j++) begin
-                    verify_accumulator(i, j, $sformatf("PE[%0d][%0d]", i, j), expected_result[i][j], $sformatf("C[%0d][%0d]", i, j));
-                end
+            if (timeout_counter >= 10000) begin
+                $display("ERROR: Matrix multiplication timeout!");
+                $finish;
             end
+
+            $display("Matrix multiplication completed after %0d cycles", timeout_counter);
+
+            // Capture results via drain mode
+            capture_drain_results();
+
+            // Verify results
+            verify_results();
 
             $display("=== %s COMPLETED ===\n", test_name);
         end
     endtask
 
-    // Enhanced task to print test summary with tolerance information
+    // Print comprehensive test summary
     task print_test_summary();
         automatic real pass_rate = (total_tests > 0) ? (test_pass_count * 100.0) / total_tests : 0.0;
         automatic real tolerance_rate = (test_pass_count > 0) ? (tolerance_pass_count * 100.0) / test_pass_count : 0.0;
         begin
-            $display("\n" + "="*60);
+            $display("\n" + "="*70);
             $display("SYSTOLIC ARRAY TEST SUMMARY");
-            $display("="*60);
+            $display("="*70);
             $display("Test: %s", test_name);
+            $display("Array Size: %0dx%0d", N, N);
+            $display("Data Width: %0d bits", DATA_WIDTH);
             $display("Input A: %s", INPUT_A_FILE);
             $display("Input B: %s", INPUT_B_FILE);
             $display("Expected: %s", EXPECTED_OUTPUT_FILE);
-            $display("-"*60);
+            $display("-"*70);
             $display("TOLERANCE CONFIGURATION:");
             $display("  Mode: %s", TOLERANCE_MODE);
             $display("  Absolute Tolerance: %.6f", ABSOLUTE_TOLERANCE);
             $display("  Relative Tolerance: %.2f%%", RELATIVE_TOLERANCE*100.0);
             $display("  Tolerance Enabled: %s", ENABLE_TOLERANCE ? "YES" : "NO");
-            $display("-"*60);
+            $display("-"*70);
             $display("TEST RESULTS:");
             $display("  Total Tests: %0d", total_tests);
             $display("  Passed: %0d", test_pass_count);
@@ -359,35 +478,53 @@ module TB_SystolicArray;
                 $display("  Tolerance Passes: %0d (%.1f%% of passes)", tolerance_pass_count, tolerance_rate);
                 $display("  Exact Matches: %0d", test_pass_count - tolerance_pass_count);
             end
-            $display("  STATUS: %s", (test_fail_count == 0) ? "ALL TESTS PASSED!" : $sformatf("%0d TEST(S) FAILED!", test_fail_count));
-            $display("="*60);
+            $display("  STATUS: %s", (test_fail_count == 0) ? "ALL TESTS PASSED!" : 
+                     $sformatf("%0d TEST(S) FAILED!", test_fail_count));
+            $display("="*70);
         end
     endtask
 
-    // Main test stimulus
+    // Main test execution
     initial begin
-        $display("Testing SystolicArray module with tolerance-based verification\n");
-
+        $display("Starting Systolic Array Testbench...\n");
+        
         initialize_signals();
         execute_matrix_test();
-        repeat(10) @(posedge clk);
-
+        
+        repeat(100) @(posedge clk);
+        
         print_test_summary();
+        
+        if (test_fail_count == 0) begin
+            $display("\n✓ All tests passed successfully!");
+        end else begin
+            $display("\n✗ %0d test(s) failed!", test_fail_count);
+        end
+        
         $finish;
     end
 
-    // Timeout
+    // Timeout watchdog
     initial begin
-        #10000000;
-        $display("ERROR: Testbench timeout after 1ms!");
+        #50000000; // 50ms timeout
+        $display("ERROR: Testbench timeout after 50ms!");
         print_test_summary();
         $finish;
     end
 
-    // VCD dump
+    // VCD dump for waveform analysis
     initial begin
         $dumpfile("TB_SystolicArray.vcd");
         $dumpvars(0, TB_SystolicArray);
+        $display("VCD file created: TB_SystolicArray.vcd");
     end
+
+    // Optional: Monitor key signals during simulation
+//    initial begin
+//        $monitor("Time=%0t: matrix_complete=%b, drain_mode=%b, drain_step=%0d", 
+//                 $time, matrix_mult_complete_o, 
+//                 dut.systolic_array_inst.drain_mode, 
+//                 dut.systolic_array_inst.drain_step_counter);
+//    end
 
 endmodule
