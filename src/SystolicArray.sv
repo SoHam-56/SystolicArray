@@ -23,17 +23,12 @@ module SystolicArray #(
     // Outputs from systolic array
     output logic [DATA_WIDTH-1:0] south_o [0:N-1],
     output logic [DATA_WIDTH-1:0] east_o [0:N-1],
-    output logic                  passthrough_valid_o [0:N-1][0:N-1],  // Updated: unified valid signal
+    output logic                  accumulator_valid_o [0:N-1][0:N-1],
 
     // Queue status
     output logic                  north_queue_empty_o,
     output logic                  west_queue_empty_o,
-    output logic                  matrix_mult_complete_o,
-
-    // Drain mode outputs
-    output logic                  drain_complete_o,
-    output logic [DATA_WIDTH-1:0] drain_data_o,
-    output logic                  drain_valid_o
+    output logic                  matrix_mult_complete_o
 );
     // Internal signals
     logic [DATA_WIDTH-1:0] weight_in_north [0:N-1];
@@ -89,7 +84,6 @@ module SystolicArray #(
         .queue_empty_o                  (west_queue_empty_o)
     );
 
-    // select_accumulator is now managed internally by the Mesh module
     always_comb begin
         for (int i = 0; i < N; i++)
             for (int j = 0; j < N; j++) select_accumulator[i][j] = 1'b0;
@@ -109,19 +103,8 @@ module SystolicArray #(
         .south_o                        (south_o),
         .east_o                         (east_o),
         .passthrough_valid_o            (passthrough_valid),
-        .done_o                         (matrix_mult_complete_o),
-        .last_element_east_o            ()  // Not used at top level
+        .done_o                         (matrix_mult_complete_o)
     );
-
-    // Connect internal passthrough_valid to output
-    assign passthrough_valid_o = passthrough_valid;
-
-    // Drain data collection from east outputs
-    // During drain mode, accumulator data flows through east_o with passthrough_valid_o
-    assign drain_complete_o = 1'b0;  // User can determine completion by monitoring east_o
-    assign drain_data_o = east_o[0]; // Collect from top row east output
-    assign drain_valid_o = passthrough_valid_o[0][N-1]; // Use passthrough_valid from top-right PE
-
 endmodule
 
 // Wrapper module for North Input Queue
