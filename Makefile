@@ -15,6 +15,7 @@ DESIGN_FILES = \
 	RowInputQueue.sv \
 	ColumnInputQueue.sv \
 	Mesh.sv \
+	OutputSram.sv \
 	ProcessingElement.sv \
 	MAC/Adder_FP32.sv \
 	MAC/LZC.sv \
@@ -44,8 +45,7 @@ VERILATOR_FLAGS = \
 	--Mdir $(VERILATOR_DIR) \
 	--Wno-WIDTHTRUNC \
 	--Wno-WIDTHEXPAND \
-	--Wno-WIDTHCONCAT \
-	--Wno-PINMISSING
+	--Wno-WIDTHCONCAT
 
 # VCS Flags
 VCS_FLAGS = \

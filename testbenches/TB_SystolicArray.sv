@@ -2,21 +2,22 @@
 
 module TB_SystolicArray;
 
-    localparam N = 3;
+    localparam N = 32;
     localparam DATA_WIDTH = 32;
     localparam CLK_PERIOD = 10;
+    localparam SRAM_DEPTH = N * N;
 
     // Tolerance configuration
-    localparam TOLERANCE_MODE = "RELATIVE"; // "ABSOLUTE", "RELATIVE", or "BOTH"
+    localparam TOLERANCE_MODE = "RELATIVE";     // "ABSOLUTE", "RELATIVE", or "BOTH"
     localparam real ABSOLUTE_TOLERANCE = 1.0;
     localparam real RELATIVE_TOLERANCE = 0.10;
-    localparam logic ENABLE_TOLERANCE = 1'b1; // Enable/disable tolerance checking
+    localparam logic ENABLE_TOLERANCE = 1'b1;   // Enable/disable tolerance checking
 
     // Test tracking variables
     integer test_pass_count = 0;
     integer test_fail_count = 0;
     integer total_tests = 0;
-    integer tolerance_pass_count = 0; // Tests that passed due to tolerance
+    integer tolerance_pass_count = 0;           // Tests that passed due to tolerance
 
     reg clk;
     reg rstn;
@@ -30,20 +31,19 @@ module TB_SystolicArray;
     reg [DATA_WIDTH-1:0] west_write_data;
     reg west_write_reset;
 
-    wire [DATA_WIDTH-1:0] south_o [0:N-1];
-    wire [DATA_WIDTH-1:0] east_o [0:N-1];
-    wire accumulator_valid_o [0:N-1][0:N-1];
     wire north_queue_empty_o;
     wire west_queue_empty_o;
     wire matrix_mult_complete_o;
 
-    // Access drain_o signals from the mesh
-    wire [N-1:0] drain_o;
-    assign drain_o = dut.systolic_array_inst.drain_o;
+    // OutputSram interface signals
+    reg read_enable;
+    reg [$clog2(SRAM_DEPTH)-1:0] read_addr;
+    wire [DATA_WIDTH-1:0] read_data;
+    wire read_valid;
+    wire collection_complete;
+    wire collection_active;
 
     reg [DATA_WIDTH-1:0] expected_result [0:N-1][0:N-1];
-    reg [DATA_WIDTH-1:0] captured_results [0:N-1][0:N-1];
-    reg results_captured [0:N-1][0:N-1];
 
     // Test configuration
     localparam INPUT_A_FILE = "matrixA.mem";
@@ -51,7 +51,7 @@ module TB_SystolicArray;
     localparam EXPECTED_OUTPUT_FILE = "matrixC.mem";
 
     // Test description
-    string test_name = "Random Matrix Test";
+    string test_name = "OutputSram Matrix Test";
 
     initial begin
         clk = 0;
@@ -78,13 +78,20 @@ module TB_SystolicArray;
         .west_write_data_i(west_write_data),
         .west_write_reset_i(west_write_reset),
         
-        // Outputs
-        .south_o(south_o),
-        .east_o(east_o),
-        .accumulator_valid_o(accumulator_valid_o),
+        // Queue status
         .north_queue_empty_o(north_queue_empty_o),
         .west_queue_empty_o(west_queue_empty_o),
-        .matrix_mult_complete_o(matrix_mult_complete_o)
+        .matrix_mult_complete_o(matrix_mult_complete_o),
+        
+        // OutputSram read interface
+        .read_enable_i(read_enable),
+        .read_addr_i(read_addr),
+        .read_data_o(read_data),
+        .read_valid_o(read_valid),
+        
+        // OutputSram status signals
+        .collection_complete_o(collection_complete),
+        .collection_active_o(collection_active)
     );
 
     function automatic logic check_tolerance(
@@ -98,13 +105,12 @@ module TB_SystolicArray;
         logic result;
 
         // Convert to real for tolerance calculations
-        // Assuming signed integer representation - adjust as needed for your data format
+        // Assuming signed integer representation
         expected_real = $signed(expected);
         actual_real = $signed(actual);
 
         // Calculate absolute difference
-        abs_diff = (expected_real > actual_real) ?
-                   (expected_real - actual_real) : (actual_real - expected_real);
+        abs_diff = (expected_real > actual_real) ? (expected_real - actual_real) : (actual_real - expected_real);
 
         // Calculate relative difference (avoid division by zero)
         if (expected_real != 0.0) begin
@@ -113,11 +119,9 @@ module TB_SystolicArray;
             rel_diff = (actual_real == 0.0) ? 0.0 : 1.0; // If expected is 0, only pass if actual is also 0
         end
 
-        // Check tolerance conditions
         abs_within_tolerance = (abs_diff <= ABSOLUTE_TOLERANCE);
         rel_within_tolerance = (rel_diff <= RELATIVE_TOLERANCE);
 
-        // Determine result based on tolerance mode
         case (TOLERANCE_MODE)
             "ABSOLUTE": result = abs_within_tolerance;
             "RELATIVE": result = rel_within_tolerance;
@@ -125,7 +129,6 @@ module TB_SystolicArray;
             default: result = abs_within_tolerance;
         endcase
 
-        // Generate tolerance info string
         tolerance_info = $sformatf("AbsDiff=%.3f(%.3f), RelDiff=%.3f%%(%.1f%%)", abs_diff, ABSOLUTE_TOLERANCE, rel_diff*100.0, RELATIVE_TOLERANCE*100.0);
 
         return result;
@@ -136,7 +139,6 @@ module TB_SystolicArray;
             rstn = 0;
             start_matrix_mult = 0;
             
-            // Initialize write interface signals
             north_write_enable = 0;
             north_write_data = 0;
             north_write_reset = 0;
@@ -145,13 +147,8 @@ module TB_SystolicArray;
             west_write_data = 0;
             west_write_reset = 0;
 
-            // Initialize result tracking arrays
-            for (int i = 0; i < N; i++) begin
-                for (int j = 0; j < N; j++) begin
-                    captured_results[i][j] = 0;
-                    results_captured[i][j] = 0;
-                end
-            end
+            read_enable = 0;
+            read_addr = 0;
 
             $display("Tolerance Configuration:");
             $display("  Mode: %s", TOLERANCE_MODE);
@@ -286,56 +283,59 @@ module TB_SystolicArray;
         end
     endtask
 
-    // Monitor and capture accumulator results during drain process
-    task monitor_drain_process();
-        integer row;
-        integer col_index;
-        reg [DATA_WIDTH-1:0] accumulator_value;
+    task wait_for_output_sram_collection();
         begin
-            $display("Starting drain process monitoring...");
+            $display("Waiting for OutputSram to complete data collection...");
             
-            // Monitor each column's data as it comes out through east_o
-            for (col_index = N-1; col_index >= 0; col_index--) begin
-                @(posedge drain_o);
-                
-                $display("Drain pulse detected, capturing east_o data for column %0d...", col_index);
-                
-                for (row = 0; row < N; row++) begin
-                    accumulator_value = east_o[row];
-                    captured_results[row][col_index] = accumulator_value;
-                    results_captured[row][col_index] = 1;
-                    
-                    $display("Captured Result[%0d][%0d] = 0x%08x (%0d)", row, col_index, accumulator_value, $signed(accumulator_value));
-                end
+            // Wait for collection to start
+            while (!collection_active) begin
+                @(posedge clk);
             end
+            $display("OutputSram collection started...");
             
-            $display("Drain process monitoring completed!");
+            // Wait for collection to complete
+            while (!collection_complete) begin
+                @(posedge clk);
+            end
+            $display("OutputSram collection completed!");
         end
     endtask
 
-    // Verify captured results against expected values
-    task verify_captured_results();
+    task verify_output_sram_results();
         logic exact_match, tolerance_match;
         string tolerance_info;
+        reg [DATA_WIDTH-1:0] actual_result;
+        integer sram_addr;
         begin
-            $display("--- Verifying Captured Results ---");
+            $display("--- Verifying OutputSram Results ---");
             
             for (int i = 0; i < N; i++) begin
                 for (int j = 0; j < N; j++) begin
                     total_tests++;
                     
-                    if (!results_captured[i][j]) begin
-                        $display("FAIL: Result[%0d][%0d] - No result captured!", i, j);
-                        test_fail_count++;
-                        continue;
+                    // Calculate row-major address
+                    sram_addr = i * N + j;
+                    
+                    // Read from OutputSram
+                    read_enable = 1;
+                    read_addr = sram_addr;
+                    @(posedge clk);
+                    
+                    // Wait for valid data
+                    while (!read_valid) begin
+                        @(posedge clk);
                     end
                     
+                    actual_result = read_data;
+                    read_enable = 0;
+                    @(posedge clk);
+                    
                     // Check for exact match first
-                    exact_match = (captured_results[i][j] == expected_result[i][j]);
+                    exact_match = (actual_result == expected_result[i][j]);
                     
                     // Check tolerance if enabled and exact match failed
                     if (!exact_match && ENABLE_TOLERANCE) begin
-                        tolerance_match = check_tolerance(expected_result[i][j], captured_results[i][j], tolerance_info);
+                        tolerance_match = check_tolerance(expected_result[i][j], actual_result, tolerance_info);
                     end else begin
                         tolerance_match = 1'b0;
                         tolerance_info = "N/A";
@@ -344,25 +344,17 @@ module TB_SystolicArray;
                     // Report results
                     if (exact_match || tolerance_match) begin
                         if (exact_match) begin
-                            $display("PASS: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT MATCH]",
-                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
-                                    captured_results[i][j], $signed(captured_results[i][j]));
+                            $display("PASS: Result[%0d][%0d] (SRAM[%0d]) - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT MATCH]", i, j, sram_addr, expected_result[i][j], $signed(expected_result[i][j]), actual_result, $signed(actual_result));
                         end else begin
-                            $display("PASS: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
-                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
-                                    captured_results[i][j], $signed(captured_results[i][j]), tolerance_info);
+                            $display("PASS: Result[%0d][%0d] (SRAM[%0d]) - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]", i, j, sram_addr, expected_result[i][j], $signed(expected_result[i][j]), actual_result, $signed(actual_result), tolerance_info);
                             tolerance_pass_count++;
                         end
                         test_pass_count++;
                     end else begin
                         if (ENABLE_TOLERANCE) begin
-                            $display("FAIL: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
-                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
-                                    captured_results[i][j], $signed(captured_results[i][j]), tolerance_info);
+                            $display("FAIL: Result[%0d][%0d] (SRAM[%0d]) - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]", i, j, sram_addr, expected_result[i][j], $signed(expected_result[i][j]), actual_result, $signed(actual_result), tolerance_info);
                         end else begin
-                            $display("FAIL: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d)",
-                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
-                                    captured_results[i][j], $signed(captured_results[i][j]));
+                            $display("FAIL: Result[%0d][%0d] (SRAM[%0d]) - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d)", i, j, sram_addr, expected_result[i][j], $signed(expected_result[i][j]), actual_result, $signed(actual_result));
                         end
                         test_fail_count++;
                     end
@@ -371,9 +363,40 @@ module TB_SystolicArray;
         end
     endtask
 
-    task execute_port_based_matrix_test();
+    task display_output_sram_contents();
+        reg [DATA_WIDTH-1:0] sram_data;
+        integer sram_addr;
         begin
-            $display("\n=== %s (Port-based with drain_o monitoring) ===", test_name);
+            $display("--- OutputSram Contents (Row-Major Order) ---");
+            
+            for (int i = 0; i < N; i++) begin
+                $write("Row %0d: ", i);
+                for (int j = 0; j < N; j++) begin
+                    sram_addr = i * N + j;
+                    
+                    read_enable = 1;
+                    read_addr = sram_addr;
+                    @(posedge clk);
+                    
+                    while (!read_valid) begin
+                        @(posedge clk);
+                    end
+                    
+                    sram_data = read_data;
+                    read_enable = 0;
+                    @(posedge clk);
+                    
+                    $write("0x%08x ", sram_data);
+                end
+                $write("\n");
+            end
+            $display("--- End of OutputSram Contents ---");
+        end
+    endtask
+
+    task execute_output_sram_matrix_test();
+        begin
+            $display("\n=== %s ===", test_name);
             $display("Input A file: %s", INPUT_A_FILE);
             $display("Input B file: %s", INPUT_B_FILE);
             $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
@@ -388,20 +411,18 @@ module TB_SystolicArray;
                 write_file_to_north(INPUT_B_FILE);
             join
 
-            // Wait a few cycles to ensure data is written
             repeat(10) @(posedge clk);
 
-            // Start matrix multiplication and monitor drain process
             $display("Starting matrix multiplication...");
             start_matrix_mult = 1;
             @(posedge clk);
             start_matrix_mult = 0;
 
-            // Monitor the drain process and capture results
-            monitor_drain_process();
+            wait_for_output_sram_collection();
 
-            // Verify captured results
-            verify_captured_results();
+            display_output_sram_contents();
+
+            verify_output_sram_results();
 
             $display("=== %s COMPLETED ===\n", test_name);
         end
@@ -412,7 +433,7 @@ module TB_SystolicArray;
         automatic real tolerance_rate = (test_pass_count > 0) ? (tolerance_pass_count * 100.0) / test_pass_count : 0.0;
         begin
             $display("\n" + "="*60);
-            $display("SYSTOLIC ARRAY TEST SUMMARY");
+            $display("SYSTOLIC ARRAY WITH OUTPUT SRAM TEST SUMMARY");
             $display("="*60);
             $display("Test: %s", test_name);
             $display("Input A: %s", INPUT_A_FILE);
@@ -441,11 +462,11 @@ module TB_SystolicArray;
 
     // Main test stimulus
     initial begin
-        $display("Testing SystolicArray module with drain_o monitoring\n");
+        $display("Testing SystolicArray module with integrated OutputSram\n");
 
         initialize_signals();
         
-        execute_port_based_matrix_test();
+        execute_output_sram_matrix_test();
         
         repeat(10) @(posedge clk);
 
@@ -453,7 +474,6 @@ module TB_SystolicArray;
         $finish;
     end
 
-    // Timeout
     initial begin
         #10000000;
         $display("ERROR: Testbench timeout after 10ms!");
@@ -461,7 +481,6 @@ module TB_SystolicArray;
         $finish;
     end
 
-    // VCD dump
     initial begin
         $dumpfile("TB_SystolicArray.vcd");
         $dumpvars(0, TB_SystolicArray);
