@@ -39,64 +39,16 @@ module SystolicArray #(
     // Internal signals for systolic array outputs
     logic [DATA_WIDTH-1:0] south_o  [0:N-1];
     logic [DATA_WIDTH-1:0] east_o   [0:N-1];
-    logic                  accumulator_valid_o [0:N-1][0:N-1];
     logic [DATA_WIDTH-1:0] weight_in_north  [0:N-1];
     logic [DATA_WIDTH-1:0] data_in_west     [0:N-1];
     logic inputs_valid;
     logic passthrough_valid   [0:N-1][0:N-1];
-    logic select_accumulator  [0:N-1][0:N-1];
     logic [N-1:0] drain_o;
 
     // Edge passthrough_valid
     logic [N-1:0] top_edge_passthrough_valid;
     logic [N-1:0] left_edge_passthrough_valid;
     logic [N-1:0] last_row, last_col;
-
-    logic matrix_mult_done_reg;
-    always_ff @(posedge clk_i or negedge rstn_i) begin
-        if (!rstn_i)
-            matrix_mult_done_reg <= 1'b0;
-        else if (start_matrix_mult_i)
-            matrix_mult_done_reg <= 1'b0;
-        else if (matrix_mult_complete_o)
-            matrix_mult_done_reg <= 1'b1;
-    end
-
-    // Shift-register "wave" for column selection
-    logic [N-1:0] col_shift;
-    logic         wave_active;
-
-    // Detect rising edge of matrix_mult_complete_o
-    logic matrix_mult_done_ff;
-    always_ff @(posedge clk_i or negedge rstn_i) begin
-        if (!rstn_i)
-            matrix_mult_done_ff <= 1'b0;
-        else
-            matrix_mult_done_ff <= matrix_mult_complete_o;
-    end
-    wire start_wave = matrix_mult_complete_o & ~matrix_mult_done_ff;
-
-    // Drive col_shift and wave_active
-    always_ff @(posedge clk_i or negedge rstn_i) begin
-        if (!rstn_i) begin
-            col_shift   <= '0;
-            wave_active <= 1'b0;
-        end else begin
-            if (start_wave) begin
-                col_shift   <= {1'b1, {(N-1){1'b0}}}; // load a '1' into MSB
-                wave_active <= 1'b1;
-            end else if (wave_active) begin
-                col_shift <= col_shift >> 1;
-                if (col_shift == '0) wave_active <= 1'b0; // stop after shift register empties
-            end
-        end
-    end
-
-    // Broadcast col_shift to select_accumulator
-    always_ff @(posedge clk_i or negedge rstn_i) begin
-        if (!rstn_i) foreach (select_accumulator[i,j]) select_accumulator[i][j] <= 1'b0;
-        else foreach (select_accumulator[i,j]) select_accumulator[i][j] <= col_shift[j];
-    end
 
     // Tie passthrough edges
     always_comb begin
@@ -115,7 +67,7 @@ module SystolicArray #(
         .rstn_i                       (rstn_i),
         
         .start_i                      (start_matrix_mult_i),
-        .top_edge_passthrough_valid_i(top_edge_passthrough_valid),
+        .top_edge_passthrough_valid_i (top_edge_passthrough_valid),
         
         .write_enable_i               (north_write_enable_i),
         .write_data_i                 (north_write_data_i),
@@ -161,7 +113,6 @@ module SystolicArray #(
         
         .inputs_valid_i        (inputs_valid),      
         .last_element_i        (last_row[N-1]),
-        .select_accumulator_i  (select_accumulator),
         
         .south_o               (south_o),
         .east_o                (east_o),

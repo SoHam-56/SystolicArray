@@ -13,7 +13,6 @@ module Mesh #(
     // Control inputs
     input logic inputs_valid_i,                              // Single input valid for top-left PE
     input logic last_element_i,                              // Pulse that indicates last element has been released from InputQueue
-    input logic select_accumulator_i [0:N-1][0:N-1],         // Individual accumulator select for each PE
 
     output logic [DATA_WIDTH-1:0] south_o [0:N-1],           // Data outputs (bottom row - South boundary)
     output logic [DATA_WIDTH-1:0] east_o  [0:N-1],           // Weight outputs (right column - East boundary)
@@ -24,15 +23,53 @@ module Mesh #(
     output logic [N-1:0] drain_o
 );
 
+    // Internal signals
     wire [DATA_WIDTH-1:0] north_connections [0:N][0:N-1];   // Data connections (North-South flow)
     wire [DATA_WIDTH-1:0] west_connections [0:N-1][0:N];    // Weight connections (West-East flow)
     wire inputs_valid_internal [0:N-1][0:N-1];              // Valid signal connections (follow the systolic flow pattern)
     wire accumulator_valid_connections [0:N-1][0:N];        // Accumulator valid connections (West-East flow)
     wire last_element_horizontal [0:N-1][0:N];              // last_element connections (horizontal flow in bottom row)
 
+    // Wave control logic for result collection
+    logic [N-1:0] col_shift;
+    logic         wave_active;
+    logic         select_accumulator [0:N-1][0:N-1];
+
     // Done logic state tracking
     logic last_element_seen;
     logic waiting_for_passthrough;
+
+    // Matrix multiplication completion tracking
+    logic matrix_mult_done_ff;
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i)
+            matrix_mult_done_ff <= 1'b0;
+        else
+            matrix_mult_done_ff <= done_o;
+    end
+    wire start_wave = done_o & ~matrix_mult_done_ff;
+
+    // Wave control: Drive col_shift and wave_active
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            col_shift   <= '0;
+            wave_active <= 1'b0;
+        end else begin
+            if (start_wave) begin
+                col_shift   <= {1'b1, {(N-1){1'b0}}}; // load a '1' into MSB
+                wave_active <= 1'b1;
+            end else if (wave_active) begin
+                col_shift <= col_shift >> 1;
+                if (col_shift == '0) wave_active <= 1'b0; // stop after shift register empties
+            end
+        end
+    end
+
+    // Broadcast col_shift to select_accumulator
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) foreach (select_accumulator[i,j]) select_accumulator[i][j] <= 1'b0;
+        else foreach (select_accumulator[i,j]) select_accumulator[i][j] <= col_shift[j];
+    end
 
     genvar row, col;
     generate
@@ -47,7 +84,7 @@ module Mesh #(
                     .west_i(west_connections[row][col]),
                     .inputs_valid_i(inputs_valid_internal[row][col]),
                     .last_element_i(last_element_horizontal[row][col]),
-                    .select_accumulator_i(select_accumulator_i[row][col]),
+                    .select_accumulator_i(select_accumulator[row][col]),
                     .accumulator_valid_i(accumulator_valid_connections[row][col]),
                     .south_o(north_connections[row+1][col]),
                     .east_o(west_connections[row][col+1]),
@@ -82,9 +119,7 @@ module Mesh #(
     generate
         for (row = 0; row < N; row = row + 1) begin : gen_last_element_boundary
             if (row == N-1) assign last_element_horizontal[row][0] = last_element_i;  // Bottom row: Connect external last_element_i only to leftmost PE
-
             else assign last_element_horizontal[row][0] = 1'b0;                       // Other rows: No last_element input
-
         end
     endgenerate
 
