@@ -32,12 +32,18 @@ module TB_SystolicArray;
 
     wire [DATA_WIDTH-1:0] south_o [0:N-1];
     wire [DATA_WIDTH-1:0] east_o [0:N-1];
+    wire accumulator_valid_o [0:N-1][0:N-1];
     wire north_queue_empty_o;
     wire west_queue_empty_o;
     wire matrix_mult_complete_o;
 
+    // Access drain_o signals from the mesh
+    wire [N-1:0] drain_o;
+    assign drain_o = dut.systolic_array_inst.drain_o;
+
     reg [DATA_WIDTH-1:0] expected_result [0:N-1][0:N-1];
-    logic select_accumulator [0:N-1][0:N-1];
+    reg [DATA_WIDTH-1:0] captured_results [0:N-1][0:N-1];
+    reg results_captured [0:N-1][0:N-1];
 
     // Test configuration
     localparam INPUT_A_FILE = "matrixA.mem";
@@ -75,17 +81,11 @@ module TB_SystolicArray;
         // Outputs
         .south_o(south_o),
         .east_o(east_o),
+        .accumulator_valid_o(accumulator_valid_o),
         .north_queue_empty_o(north_queue_empty_o),
         .west_queue_empty_o(west_queue_empty_o),
         .matrix_mult_complete_o(matrix_mult_complete_o)
     );
-
-    // Override the select_accumulator signal
-    always_comb begin
-        for (int i = 0; i < N; i++)
-            for (int j = 0; j < N; j++)
-                dut.select_accumulator[i][j] = select_accumulator[i][j];
-    end
 
     function automatic logic check_tolerance(
         input [DATA_WIDTH-1:0] expected,
@@ -145,10 +145,12 @@ module TB_SystolicArray;
             west_write_data = 0;
             west_write_reset = 0;
 
-            // Initialize select_accumulator
+            // Initialize result tracking arrays
             for (int i = 0; i < N; i++) begin
-                for (int j = 0; j < N; j++)
-                    select_accumulator[i][j] = 0;
+                for (int j = 0; j < N; j++) begin
+                    captured_results[i][j] = 0;
+                    results_captured[i][j] = 0;
+                end
             end
 
             $display("Tolerance Configuration:");
@@ -284,139 +286,94 @@ module TB_SystolicArray;
         end
     endtask
 
-    task wait_for_pe_idle(input integer row, input integer col);
+    // Monitor and capture accumulator results during drain process
+    task monitor_drain_process();
+        integer row;
+        integer col_index;
+        reg [DATA_WIDTH-1:0] accumulator_value;
         begin
-            // Validate coordinates
-            if (row >= N || col >= N || row < 0 || col < 0) begin
-                $display("ERROR: Invalid PE coordinates [%0d][%0d] for %0dx%0d array", row, col, N, N);
-                return;
+            $display("Starting drain process monitoring...");
+            
+            // Monitor each column's data as it comes out through east_o
+            for (col_index = N-1; col_index >= 0; col_index--) begin
+                @(posedge drain_o);
+                
+                $display("Drain pulse detected, capturing east_o data for column %0d...", col_index);
+                
+                for (row = 0; row < N; row++) begin
+                    accumulator_value = east_o[row];
+                    captured_results[row][col_index] = accumulator_value;
+                    results_captured[row][col_index] = 1;
+                    
+                    $display("Captured Result[%0d][%0d] = 0x%08x (%0d)", row, col_index, accumulator_value, $signed(accumulator_value));
+                end
             end
-
-            $display("Waiting for PE[%0d][%0d] computation to complete...", row, col);
-
-            // Wait for matrix multiplication completion
-            while (!matrix_mult_complete_o) begin
-                @(posedge clk);
-            end
-
-            // Additional wait to ensure all PEs have settled
-            repeat(10) @(posedge clk);
-
-            $display("PE[%0d][%0d] computation completed", row, col);
+            
+            $display("Drain process monitoring completed!");
         end
     endtask
 
-    task verify_accumulator(
-        input integer row,
-        input integer col,
-        input string pe_name,
-        input [DATA_WIDTH-1:0] expected_value,
-        input string test_description
-    );
-        reg [DATA_WIDTH-1:0] actual_value;
-        reg valid_flag;
+    // Verify captured results against expected values
+    task verify_captured_results();
         logic exact_match, tolerance_match;
         string tolerance_info;
         begin
-            total_tests++;
-            $display("Verifying %s accumulator for %s...", pe_name, test_description);
-
-            wait_for_pe_idle(row, col);
-
-            select_accumulator[row][col] = 1;
-            @(posedge clk);
-
-            // Wait for valid pulse
-//            while (!accumulator_valid_o[row][col]) @(posedge clk);
-
-            // Read accumulator value
-            actual_value = (col == N-1) ? east_o[row] : dut.systolic_array_inst.west_connections[row][col+1];
-//            valid_flag = accumulator_valid_o[row][col];
-
-            select_accumulator[row][col] = 0;
-            @(posedge clk);
-
-            // Check for exact match first
-            exact_match = (actual_value == expected_value);
-
-            // Check tolerance if enabled and exact match failed
-            if (!exact_match && ENABLE_TOLERANCE) begin
-                tolerance_match = check_tolerance(expected_value, actual_value, tolerance_info);
-            end else begin
-                tolerance_match = 1'b0;
-                tolerance_info = "N/A";
-            end
-
-            // Verify and update counters
-            if (valid_flag && (exact_match || tolerance_match)) begin
-                if (exact_match) begin
-                    $display("PASS: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT MATCH]",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value));
-                end else begin
-                    $display("PASS: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value), tolerance_info);
-                    tolerance_pass_count++;
-                end
-                test_pass_count++;
-            end else begin
-                if (ENABLE_TOLERANCE) begin
-                    $display("FAIL: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d), Valid: %b [TOLERANCE: %s]",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value), valid_flag, tolerance_info);
-                end else begin
-                    $display("FAIL: %s %s - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d), Valid: %b",
-                            pe_name, test_description, expected_value, $signed(expected_value),
-                            actual_value, $signed(actual_value), valid_flag);
-                end
-                test_fail_count++;
-            end
-        end
-    endtask
-
-    task execute_matrix_test();
-        begin
-            $display("\n=== %s (File-based) ===", test_name);
-            $display("Input A file: %s", INPUT_A_FILE);
-            $display("Input B file: %s", INPUT_B_FILE);
-            $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
-
-            load_expected_results(EXPECTED_OUTPUT_FILE);
-
-            apply_reset();
-
-            // Start matrix multiplication
-            $display("Starting matrix multiplication...");
-            start_matrix_mult = 1;
-            @(posedge clk);
-            start_matrix_mult = 0;
-
-            // Wait for completion
-            $display("Waiting for matrix multiplication to complete...");
-            while (!matrix_mult_complete_o) begin
-                @(posedge clk);
-            end
-            $display("Matrix multiplication completed!");
-
-            // Additional wait for all computations to settle
-            repeat(20) @(posedge clk);
-
-            // Verify all results
-            $display("--- Verifying Results ---");
+            $display("--- Verifying Captured Results ---");
+            
             for (int i = 0; i < N; i++) begin
                 for (int j = 0; j < N; j++) begin
-                    verify_accumulator(i, j, $sformatf("PE[%0d][%0d]", i, j), expected_result[i][j], $sformatf("C[%0d][%0d]", i, j));
+                    total_tests++;
+                    
+                    if (!results_captured[i][j]) begin
+                        $display("FAIL: Result[%0d][%0d] - No result captured!", i, j);
+                        test_fail_count++;
+                        continue;
+                    end
+                    
+                    // Check for exact match first
+                    exact_match = (captured_results[i][j] == expected_result[i][j]);
+                    
+                    // Check tolerance if enabled and exact match failed
+                    if (!exact_match && ENABLE_TOLERANCE) begin
+                        tolerance_match = check_tolerance(expected_result[i][j], captured_results[i][j], tolerance_info);
+                    end else begin
+                        tolerance_match = 1'b0;
+                        tolerance_info = "N/A";
+                    end
+                    
+                    // Report results
+                    if (exact_match || tolerance_match) begin
+                        if (exact_match) begin
+                            $display("PASS: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT MATCH]",
+                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
+                                    captured_results[i][j], $signed(captured_results[i][j]));
+                        end else begin
+                            $display("PASS: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
+                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
+                                    captured_results[i][j], $signed(captured_results[i][j]), tolerance_info);
+                            tolerance_pass_count++;
+                        end
+                        test_pass_count++;
+                    end else begin
+                        if (ENABLE_TOLERANCE) begin
+                            $display("FAIL: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
+                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
+                                    captured_results[i][j], $signed(captured_results[i][j]), tolerance_info);
+                        end else begin
+                            $display("FAIL: Result[%0d][%0d] - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d)",
+                                    i, j, expected_result[i][j], $signed(expected_result[i][j]),
+                                    captured_results[i][j], $signed(captured_results[i][j]));
+                        end
+                        test_fail_count++;
+                    end
                 end
             end
-
-            $display("=== %s COMPLETED ===\n", test_name);
         end
     endtask
 
     task execute_port_based_matrix_test();
         begin
-            $display("\n=== %s (Port-based) ===", test_name);
+            $display("\n=== %s (Port-based with drain_o monitoring) ===", test_name);
             $display("Input A file: %s", INPUT_A_FILE);
             $display("Input B file: %s", INPUT_B_FILE);
             $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
@@ -434,29 +391,17 @@ module TB_SystolicArray;
             // Wait a few cycles to ensure data is written
             repeat(10) @(posedge clk);
 
-            // Start matrix multiplication
+            // Start matrix multiplication and monitor drain process
             $display("Starting matrix multiplication...");
             start_matrix_mult = 1;
             @(posedge clk);
             start_matrix_mult = 0;
 
-            // Wait for completion
-            $display("Waiting for matrix multiplication to complete...");
-            while (!matrix_mult_complete_o) begin
-                @(posedge clk);
-            end
-            $display("Matrix multiplication completed!");
+            // Monitor the drain process and capture results
+            monitor_drain_process();
 
-            // Additional wait for all computations to settle
-            repeat(20) @(posedge clk);
-
-            // Verify all results
-            $display("--- Verifying Results ---");
-            for (int i = 0; i < N; i++) begin
-                for (int j = 0; j < N; j++) begin
-                    verify_accumulator(i, j, $sformatf("PE[%0d][%0d]", i, j), expected_result[i][j], $sformatf("C[%0d][%0d]", i, j));
-                end
-            end
+            // Verify captured results
+            verify_captured_results();
 
             $display("=== %s COMPLETED ===\n", test_name);
         end
@@ -496,12 +441,11 @@ module TB_SystolicArray;
 
     // Main test stimulus
     initial begin
-        $display("Testing SystolicArray module with tolerance-based verification\n");
+        $display("Testing SystolicArray module with drain_o monitoring\n");
 
         initialize_signals();
         
-         execute_matrix_test();
-//        execute_port_based_matrix_test();
+        execute_port_based_matrix_test();
         
         repeat(10) @(posedge clk);
 
