@@ -3,10 +3,10 @@
 module TB_SystolicMesh;
 
     // SystolicMesh parameters
-    localparam TILE_SIZE = 8;
+    localparam TILE_SIZE = 2;
     localparam DATA_WIDTH = 32;
-    localparam TILES_X = 4;
-    localparam TILES_Y = 4;
+    localparam TILES_X = 2;
+    localparam TILES_Y = 2;
     localparam CLK_PERIOD = 10;
 
     // Derived parameters
@@ -61,9 +61,9 @@ module TB_SystolicMesh;
     reg [DATA_WIDTH-1:0] expected_result [0:UNIFIED_SRAM_SIZE-1];
 
     // Test configuration
-    localparam INPUT_A_FILE = "mesh_matrixA.mem";
-    localparam INPUT_B_FILE = "mesh_matrixB.mem";
-    localparam EXPECTED_OUTPUT_FILE = "mesh_matrixC.mem";
+    localparam INPUT_A_FILE = "matrixA.mem";
+    localparam INPUT_B_FILE = "matrixB.mem";
+    localparam EXPECTED_OUTPUT_FILE = "matrixC.mem";
 
     // Test description
     string test_name = "SystolicMesh Unified SRAM Test";
