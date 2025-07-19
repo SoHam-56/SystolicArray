@@ -545,8 +545,8 @@ module TB_SystolicMesh;
 
     // Timeout watchdog
     initial begin
-        #50000000; // 50ms timeout
-        $display("ERROR: Testbench timeout after 50ms!");
+        #5000;
+        $display("ERROR: Testbench timeout");
         print_test_summary();
         $finish;
     end
