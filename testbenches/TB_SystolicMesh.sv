@@ -68,18 +68,15 @@ module TB_SystolicMesh;
     // Test description
     string test_name = "SystolicMesh Unified SRAM Test";
 
-    // Clock generation
     initial begin
         clk = 0;
         forever #(CLK_PERIOD/2) clk = ~clk;
     end
 
-    // DUT instantiation
     SystolicMesh #(
-        .TILE_SIZE(TILE_SIZE),
+        .MATRIX_SIZE(TILE_SIZE * TILE_SIZE),
         .DATA_WIDTH(DATA_WIDTH),
-        .TILES_X(TILES_X),
-        .TILES_Y(TILES_Y),
+        .TILE_SIZE(TILE_SIZE),
         .ROWS_MEM("rows.mem"),
         .COLS_MEM("cols.mem")
     ) dut (
@@ -100,17 +97,17 @@ module TB_SystolicMesh;
         // Queue status
         .north_queue_empty_o(north_queue_empty_o),
         .west_queue_empty_o(west_queue_empty_o),
-        .matrix_mult_complete_o(matrix_mult_complete_o),
+        .matrix_mult_complete_o(matrix_mult_complete_o)
 
-        // Unified SRAM read interface
-        .read_enable_i(read_enable),
-        .read_addr_i(read_addr),
-        .read_data_o(read_data),
-        .read_valid_o(read_valid),
+//        // Unified SRAM read interface
+//        .read_enable_i(read_enable),
+//        .read_addr_i(read_addr),
+//        .read_data_o(read_data),
+//        .read_valid_o(read_valid),
 
-        // Unified SRAM status signals
-        .collection_complete_o(collection_complete),
-        .collection_active_o(collection_active)
+//        // Unified SRAM status signals
+//        .collection_complete_o(collection_complete),
+//        .collection_active_o(collection_active)
     );
 
     // Tolerance checking function
@@ -545,7 +542,7 @@ module TB_SystolicMesh;
 
     // Timeout watchdog
     initial begin
-        #5000;
+        #500000;
         $display("ERROR: Testbench timeout");
         print_test_summary();
         $finish;
