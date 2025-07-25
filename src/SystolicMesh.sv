@@ -9,7 +9,7 @@ module SystolicMesh #(
 ) (
     input  logic                                                    clk_i,
     input  logic                                                    rstn_i,
-    input  logic                                                    start_matrix_mult_i,
+    input  logic                                                    start_matrix_mult_i,  // Driver indicates data input complete
 
     // North Queue Write interface (Matrix B data)
     input  logic                                                    north_write_enable_i,
@@ -38,9 +38,7 @@ module SystolicMesh #(
 
     // Check that matrix size is divisible by tile size
     initial begin
-        if (MATRIX_SIZE % TILE_SIZE != 0) begin
-            $error("MATRIX_SIZE (%0d) must be divisible by TILE_SIZE (%0d)", MATRIX_SIZE, TILE_SIZE);
-        end
+        if (MATRIX_SIZE % TILE_SIZE != 0) $error("MATRIX_SIZE (%0d) must be divisible by TILE_SIZE (%0d)", MATRIX_SIZE, TILE_SIZE);
         $display("Block Matrix Multiplication Configuration:");
         $display("  Matrix Size: %0dx%0d", MATRIX_SIZE, MATRIX_SIZE);
         $display("  Tile Size: %0dx%0d", TILE_SIZE, TILE_SIZE);
@@ -135,166 +133,26 @@ module SystolicMesh #(
     endfunction
 
     // Block matrix multiplication control logic
-    logic allocation_active;
     logic allocation_complete;
-    logic [$clog2(TOTAL_PARTIAL_PRODUCTS)-1:0] current_partial_product_idx;
-    logic [$clog2(TILE_ELEMENTS)-1:0] current_element_idx;
+    logic [$clog2(TOTAL_PARTIAL_PRODUCTS):0] current_partial_product_idx;
+    logic [$clog2(TILE_ELEMENTS):0] current_element_idx;
 
     // Block indices for C[i,j] = sum over k of A[i,k] * B[k,j]
-    logic [$clog2(NUM_TILES)-1:0] current_output_tile_row;    // i
-    logic [$clog2(NUM_TILES)-1:0] current_output_tile_col;    // j
-    logic [$clog2(NUM_TILES)-1:0] current_k_idx;             // k
+    logic [$clog2(NUM_TILES)-1:0] current_output_tile_row;  // i
+    logic [$clog2(NUM_TILES)-1:0] current_output_tile_col;  // j
+    logic [$clog2(NUM_TILES)-1:0] current_k_idx;            // k
 
     // Element indices within current tile
     logic [$clog2(TILE_SIZE)-1:0] current_elem_row, current_elem_col;
 
-    // Check if memories are ready for allocation
-    logic memories_ready;
-    always_comb begin
-        memories_ready = (north_fill_count >= MEM_DEPTH) && (west_fill_count >= MEM_DEPTH);
-    end
-
-    // State machine
-    always_ff @(posedge clk_i or negedge rstn_i) begin
-        if (!rstn_i) begin
-            current_state <= IDLE;
-        end else begin
-            current_state <= next_state;
-        end
-    end
-
-    always_comb begin
-        next_state = current_state;
-
-        case (current_state)
-            IDLE: begin
-                if (north_write_enable_i || west_write_enable_i) begin
-                    next_state = FILLING_MEMORY;
-                end
-            end
-
-            FILLING_MEMORY: begin
-                if (memories_ready) begin
-                    next_state = ALLOCATING_DATA;
-                end
-            end
-
-            ALLOCATING_DATA: begin
-                if (allocation_complete) begin
-                    next_state = PROCESSING;
-                end
-            end
-
-            PROCESSING: begin
-                if (matrix_mult_complete_o) begin
-                    next_state = ACCUMULATING;
-                end
-            end
-
-            ACCUMULATING: begin
-                // Add accumulation logic here if needed
-                next_state = COMPLETE;
-            end
-
-            COMPLETE: begin
-                // Can add logic to return to IDLE when results are read
-                next_state = COMPLETE;
-            end
-        endcase
-    end
-
-    // Allocation counter logic for block matrix multiplication
-    always_ff @(posedge clk_i or negedge rstn_i) begin
-        if (!rstn_i) begin
-            allocation_active <= 1'b0;
-            current_partial_product_idx <= 0;
-            current_element_idx <= 0;
-            current_output_tile_row <= 0;
-            current_output_tile_col <= 0;
-            current_k_idx <= 0;
-            current_elem_row <= 0;
-            current_elem_col <= 0;
-        end else if (current_state == IDLE) begin
-            allocation_active <= 1'b0;
-            current_partial_product_idx <= 0;
-            current_element_idx <= 0;
-            current_output_tile_row <= 0;
-            current_output_tile_col <= 0;
-            current_k_idx <= 0;
-            current_elem_row <= 0;
-            current_elem_col <= 0;
-        end else if (current_state == ALLOCATING_DATA) begin
-            allocation_active <= 1'b1;
-
-            // Advance allocation counters when data is being written to tiles
-            if (tile_allocation_active) begin
-                if (current_elem_col == TILE_SIZE - 1) begin
-                    current_elem_col <= 0;
-                    if (current_elem_row == TILE_SIZE - 1) begin
-                        current_elem_row <= 0;
-                        if (current_element_idx == TILE_ELEMENTS - 1) begin
-                            current_element_idx <= 0;
-                            // Move to next partial product: A[i,k] * B[k,j]
-                            if (current_k_idx == NUM_TILES - 1) begin
-                                current_k_idx <= 0;
-                                if (current_output_tile_col == NUM_TILES - 1) begin
-                                    current_output_tile_col <= 0;
-                                    if (current_output_tile_row == NUM_TILES - 1) begin
-                                        current_output_tile_row <= 0;
-                                    end else begin
-                                        current_output_tile_row <= current_output_tile_row + 1;
-                                    end
-                                end else begin
-                                    current_output_tile_col <= current_output_tile_col + 1;
-                                end
-                            end else begin
-                                current_k_idx <= current_k_idx + 1;
-                            end
-
-                            if (current_partial_product_idx == TOTAL_PARTIAL_PRODUCTS - 1) begin
-                                current_partial_product_idx <= 0;
-                            end else begin
-                                current_partial_product_idx <= current_partial_product_idx + 1;
-                            end
-                        end else begin
-                            current_element_idx <= current_element_idx + 1;
-                        end
-                    end else begin
-                        current_elem_row <= current_elem_row + 1;
-                    end
-                end else begin
-                    current_elem_col <= current_elem_col + 1;
-                end
-            end
-        end
-    end
-
-    // Check if allocation is complete
-    logic tile_allocation_active;
-    always_comb begin
-        allocation_complete = (current_partial_product_idx == TOTAL_PARTIAL_PRODUCTS - 1) && (current_element_idx == TILE_ELEMENTS - 1);
-        tile_allocation_active = allocation_active && !allocation_complete;
-    end
-
-    // Memory read control for allocation
-    always_comb begin
-        north_mem_read_enable = 1'b0;
-        west_mem_read_enable = 1'b0;
-        north_mem_read_addr = 0;
-        west_mem_read_addr = 0;
-
-        if (current_state == ALLOCATING_DATA && tile_allocation_active) begin
-            // Calculate addresses for current partial product A[i,k] * B[k,j]
-            west_mem_read_addr = get_matrix_a_addr(current_output_tile_row, current_k_idx,
-                                                  current_elem_row, current_elem_col);
-            north_mem_read_addr = get_matrix_b_addr(current_k_idx, current_output_tile_col,
-                                                   current_elem_row, current_elem_col);
-
-            north_mem_read_enable = !north_mem_empty;
-            west_mem_read_enable = !west_mem_empty;
-        end
-    end
-
+    // Track which tiles have been fully allocated and started
+    logic [TOTAL_PARTIAL_PRODUCTS-1:0] tile_allocation_complete;
+    logic [TOTAL_PARTIAL_PRODUCTS-1:0] tile_start_sent;
+    
+    // Current tile being allocated (sequential allocation)
+    logic current_tile_allocation_active;
+    logic current_tile_allocation_complete;
+    
     // Tile interface arrays - generate tiles for partial products
     logic [TOTAL_PARTIAL_PRODUCTS-1:0] tile_start;
     logic [TOTAL_PARTIAL_PRODUCTS-1:0] tile_north_write_enable;
@@ -350,35 +208,273 @@ module SystolicMesh #(
         end
     endgenerate
 
-    // Route data to tiles during allocation
-    always_comb begin
-        // Initialize all tile signals
-        for (int t = 0; t < TOTAL_PARTIAL_PRODUCTS; t++) begin
-            tile_north_write_enable[t] = 1'b0;
-            tile_west_write_enable[t] = 1'b0;
-            tile_north_write_data[t] = north_mem_read_data;
-            tile_west_write_data[t] = west_mem_read_data;
-            tile_north_write_reset[t] = north_write_reset_i;
-            tile_west_write_reset[t] = west_write_reset_i;
-            tile_start[t] = start_matrix_mult_i && (current_state == ALLOCATING_DATA);
+    // Check if memories are ready for allocation
+    logic memories_ready;
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            memories_ready <= 1'b0;
+        end else begin
+            memories_ready <= (north_fill_count >= MEM_DEPTH) && (west_fill_count >= MEM_DEPTH);
         end
+    end
 
-        // Route data to current partial product tile during allocation
-        if (current_state == ALLOCATING_DATA && tile_allocation_active) begin
-            tile_north_write_enable[current_partial_product_idx] = north_mem_read_valid;
-            tile_west_write_enable[current_partial_product_idx] = west_mem_read_valid;
+    // State machine
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            current_state <= IDLE;
+        end else begin
+            current_state <= next_state;
+        end
+    end
+
+    always_comb begin
+      next_state = current_state;
+            case (current_state)
+                IDLE: begin
+                    // Start filling memory when driver indicates start or when data comes in
+                    if (north_write_enable_i || west_write_enable_i) begin
+                        next_state <= FILLING_MEMORY;
+                    end else begin
+                        next_state <= IDLE;
+                    end
+                end
+
+                FILLING_MEMORY: begin
+                    // Move to allocation when memories are full AND driver says data input is complete
+                    if (memories_ready)
+                        if (start_matrix_mult_i) next_state <= ALLOCATING_DATA;
+                    else
+                        next_state <= FILLING_MEMORY;
+                end
+
+                ALLOCATING_DATA: begin
+                    if (allocation_complete) begin
+                        next_state <= PROCESSING;
+                    end else begin
+                        next_state <= ALLOCATING_DATA;
+                    end
+                end
+
+                PROCESSING: begin
+                    if (matrix_mult_complete_o) begin
+                        next_state <= ACCUMULATING;
+                    end else begin
+                        next_state <= PROCESSING;
+                    end
+                end
+
+                ACCUMULATING: begin
+                    // Add accumulation logic here if needed
+                    next_state <= COMPLETE;
+                end
+
+                COMPLETE: begin
+                    // Can add logic to return to IDLE when results are read
+                    next_state <= COMPLETE;
+                end
+
+                default: begin
+                    next_state <= IDLE;
+                end
+            endcase
+    end
+    
+    // Element position counters within current tile
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (~rstn_i || current_state == IDLE) begin
+            current_elem_row <= 0;
+            current_elem_col <= 0;
+            current_element_idx <= 0;
+        end else if (current_state == ALLOCATING_DATA && current_tile_allocation_active) begin
+            if (current_elem_col == TILE_SIZE - 1) begin
+                current_elem_col <= 0;
+                
+                if (current_elem_row == TILE_SIZE - 1) current_elem_row <= 0;
+                else current_elem_row <= current_elem_row + 1;
+                
+            end else begin
+                current_elem_col <= current_elem_col + 1;
+            end
+            
+            if (west_mem_read_valid) current_element_idx <= current_element_idx + 1;
+            
+            // Reset element counters when tile is complete
+            if (current_element_idx == TILE_ELEMENTS - 1) begin
+                current_element_idx <= 0;
+//                current_elem_row <= 0;
+                current_elem_col <= 0;
+            end
+        end
+    end
+    
+    // Tile completion tracking
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (~rstn_i || current_state == IDLE) begin
+            tile_allocation_complete <= '0;
+        end else if (current_state == ALLOCATING_DATA && current_tile_allocation_active) begin
+            if (current_element_idx == TILE_ELEMENTS - 1) begin
+                tile_allocation_complete[current_partial_product_idx] <= 1'b1;
+            end
+        end
+    end
+    
+    // Partial product index advancement
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (~rstn_i || current_state == IDLE) begin
+            current_partial_product_idx <= 0;
+        end else if (current_state == ALLOCATING_DATA && current_tile_allocation_active) begin
+            if (current_element_idx == TILE_ELEMENTS - 1) begin
+                if (current_partial_product_idx == TOTAL_PARTIAL_PRODUCTS - 1) begin
+                    // All tiles allocated - don't wrap around
+                    current_partial_product_idx <= current_partial_product_idx;
+                end else begin
+                    current_partial_product_idx <= current_partial_product_idx + 1;
+                end
+            end
+        end
+    end
+    
+    // Output tile position counters (i,j indices)
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (~rstn_i || current_state == IDLE) begin
+            current_output_tile_row <= 0;
+            current_output_tile_col <= 0;
+            current_k_idx <= 0;
+        end else if (current_state == ALLOCATING_DATA && current_tile_allocation_active) begin
+            if (current_element_idx == TILE_ELEMENTS - 1) begin
+                // Move to next partial product: A[i,k] * B[k,j]
+                if (current_k_idx == NUM_TILES - 1) begin
+                    current_k_idx <= 0;
+                    
+                    if (current_output_tile_col == NUM_TILES - 1) begin
+                        current_output_tile_col <= 0;
+                        
+                        if (current_output_tile_row == NUM_TILES - 1) current_output_tile_row <= 0;
+                        else current_output_tile_row <= current_output_tile_row + 1;
+                        
+                    end else
+                        current_output_tile_col <= current_output_tile_col + 1;
+
+                end else
+                    current_k_idx <= current_k_idx + 1;
+            end
+        end
+    end
+    
+    // Tile start signal generation
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (~rstn_i || current_state == IDLE) begin
+            tile_start_sent <= '0;
+        end else if (current_state == PROCESSING) begin
+            // Send start signals to tiles that are allocated but haven't been started yet
+            for (int t = 0; t < TOTAL_PARTIAL_PRODUCTS; t++) begin
+                if (tile_allocation_complete[t] && !tile_start_sent[t]) begin
+                    tile_start_sent[t] <= 1'b1;
+                end
+            end
+        end
+    end
+    
+    // Helper signal for memory status
+    logic memories_empty;
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) memories_empty <= 1'b1;
+        else memories_empty <= north_mem_empty || west_mem_empty;
+    end
+    
+    // Check if allocation is complete and current tile allocation status
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            allocation_complete <= 1'b0;
+            current_tile_allocation_complete <= 1'b0;
+            current_tile_allocation_active <= 1'b0;
+        end else begin
+            // Current tile is complete when we've allocated all its elements
+            current_tile_allocation_complete <= (current_element_idx == TILE_ELEMENTS - 1) && north_mem_read_valid && west_mem_read_valid && current_tile_allocation_active;
+            
+            // Overall allocation is complete when all tiles are allocated
+            allocation_complete <= (current_partial_product_idx == TOTAL_PARTIAL_PRODUCTS - 1) && current_tile_allocation_complete;
+            
+            // Current tile allocation is active when we're in allocation state and haven't completed current tile
+            current_tile_allocation_active <= (current_state == ALLOCATING_DATA) && !tile_allocation_complete[current_partial_product_idx] && !memories_empty;
+        end
+    end
+
+    // Memory read control for sequential allocation
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            north_mem_read_enable <= 1'b0;
+            west_mem_read_enable <= 1'b0;
+        end else if (current_state == ALLOCATING_DATA && current_tile_allocation_active) begin
+            // Calculate addresses for current partial product A[i,k] * B[k,j]
+            west_mem_read_addr <= get_matrix_a_addr(current_output_tile_row, current_k_idx, current_elem_row, current_elem_col);
+            north_mem_read_addr <= get_matrix_b_addr(current_k_idx, current_output_tile_col, current_elem_row, current_elem_col);
+
+            north_mem_read_enable <= 1'b1;
+            west_mem_read_enable <= 1'b1;
+        end else begin
+            north_mem_read_enable <= 1'b0;
+            west_mem_read_enable <= 1'b0;
+        end
+    end
+
+    // Route data to tiles during allocation - ONLY to current tile
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            for (int t = 0; t < TOTAL_PARTIAL_PRODUCTS; t++) begin
+                tile_north_write_enable[t] <= 1'b0;
+                tile_west_write_enable[t] <= 1'b0;
+                tile_north_write_data[t] <= '0;
+                tile_west_write_data[t] <= '0;
+                tile_north_write_reset[t] <= 1'b1;
+                tile_west_write_reset[t] <= 1'b1;
+                tile_start[t] <= 1'b0;
+            end
+        end else begin
+            // Initialize all tile signals to inactive
+            for (int t = 0; t < TOTAL_PARTIAL_PRODUCTS; t++) begin
+                tile_north_write_enable[t] <= 1'b0;
+                tile_west_write_enable[t] <= 1'b0;
+                tile_north_write_data[t] <= north_mem_read_data;
+                tile_west_write_data[t] <= west_mem_read_data;
+                tile_north_write_reset[t] <= north_write_reset_i;
+                tile_west_write_reset[t] <= west_write_reset_i;
+                tile_start[t] <= 1'b0;
+            end
+
+            // Route data ONLY to current partial product tile during allocation
+            if (current_state == ALLOCATING_DATA && current_tile_allocation_active) begin
+                tile_north_write_enable[current_partial_product_idx] <= north_mem_read_valid;
+                tile_west_write_enable[current_partial_product_idx] <= west_mem_read_valid;
+            end
+            
+            // Send start signal only to tiles that are allocated and ready to start
+            if (current_state == PROCESSING) begin
+                for (int t = 0; t < TOTAL_PARTIAL_PRODUCTS; t++) begin
+                    if (tile_allocation_complete[t] && !tile_start_sent[t]) begin
+                        tile_start[t] <= 1'b1;
+                    end
+                end
+            end
         end
     end
 
     // Aggregate status signals
-    always_comb begin
-        north_queue_empty_o = north_mem_empty;
-        west_queue_empty_o = west_mem_empty;
-        matrix_mult_complete_o = 1'b1;
-        allocation_complete_o = allocation_complete;
-
-        for (int t = 0; t < TOTAL_PARTIAL_PRODUCTS; t++) begin
-            matrix_mult_complete_o &= tile_matrix_mult_complete[t];
+    always_ff @(posedge clk_i or negedge rstn_i) begin
+        if (!rstn_i) begin
+            north_queue_empty_o <= 1'b1;
+            west_queue_empty_o <= 1'b1;
+            matrix_mult_complete_o <= 1'b0;
+            allocation_complete_o <= 1'b0;
+        end else begin
+            north_queue_empty_o <= north_mem_empty;
+            west_queue_empty_o <= west_mem_empty;
+            allocation_complete_o <= allocation_complete;
+            
+            matrix_mult_complete_o <= 1'b1;
+            for (int t = 0; t < TOTAL_PARTIAL_PRODUCTS; t++) begin
+                matrix_mult_complete_o <= matrix_mult_complete_o & tile_matrix_mult_complete[t];
+            end
         end
     end
 
