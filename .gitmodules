@@ -1,0 +1,3 @@
+[submodule "ArithmeticLibrary"]
+	path = ArithmeticLibrary
+	url = https://github.com/SoHam-56/ArithmeticLibrary
