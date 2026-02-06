@@ -2,10 +2,12 @@
 
 module TB_SystolicArray;
 
-  localparam N = 32;
+  localparam N = 4;
   localparam DATA_WIDTH = 32;
   localparam CLK_PERIOD = 10;
   localparam SRAM_DEPTH = N * N;
+
+  localparam int NUM_TEST_SETS = 3;
 
   // Tolerance configuration
   localparam TOLERANCE_MODE = "RELATIVE";  // "ABSOLUTE", "RELATIVE", or "BOTH"
@@ -13,6 +15,10 @@ module TB_SystolicArray;
   localparam real RELATIVE_TOLERANCE = 0.05;
   localparam logic ENABLE_TOLERANCE = 1'b1;  // Enable/disable tolerance checking
 
+  localparam DEFAULT_INPUT_A = "matrixA.mem";
+  localparam DEFAULT_INPUT_B = "matrixB.mem";
+
+  // Global Counters
   integer test_pass_count = 0;
   integer test_fail_count = 0;
   integer total_tests = 0;
@@ -44,10 +50,6 @@ module TB_SystolicArray;
 
   reg [DATA_WIDTH-1:0] expected_result[0:N-1][0:N-1];
 
-  localparam INPUT_A_FILE = "matrixA.mem";
-  localparam INPUT_B_FILE = "matrixB.mem";
-  localparam EXPECTED_OUTPUT_FILE = "matrixC.mem";
-
   string test_name = "OutputSram Matrix Test";
 
   initial begin
@@ -58,8 +60,8 @@ module TB_SystolicArray;
   SystolicArray #(
       .N(N),
       .DATA_WIDTH(DATA_WIDTH),
-      .ROWS(INPUT_A_FILE),
-      .COLS(INPUT_B_FILE)
+      .ROWS(DEFAULT_INPUT_A),
+      .COLS(DEFAULT_INPUT_B)
   ) dut (
       .clk_i(clk),
       .rstn_i(rstn),
@@ -94,7 +96,6 @@ module TB_SystolicArray;
     logic result;
 
     // Convert to real for tolerance calculations
-    // Assuming signed integer representation
     expected_real = $signed(expected);
     actual_real = $signed(actual);
 
@@ -105,7 +106,7 @@ module TB_SystolicArray;
     if (expected_real != 0.0) begin
       rel_diff = abs_diff / ((expected_real > 0) ? expected_real : -expected_real);
     end else begin
-      rel_diff = (actual_real == 0.0) ? 0.0 : 1.0; // If expected is 0, only pass if actual is also 0
+      rel_diff = (actual_real == 0.0) ? 0.0 : 1.0;
     end
 
     abs_within_tolerance = (abs_diff <= ABSOLUTE_TOLERANCE);
@@ -145,11 +146,13 @@ module TB_SystolicArray;
       read_enable = 0;
       read_addr = 0;
 
-      $display("Tolerance Configuration:");
-      $display("  Mode: %s", TOLERANCE_MODE);
-      $display("  Absolute Tolerance: %.6f", ABSOLUTE_TOLERANCE);
-      $display("  Relative Tolerance: %.2f%%", RELATIVE_TOLERANCE * 100.0);
-      $display("  Tolerance Enabled: %s\n", ENABLE_TOLERANCE ? "YES" : "NO");
+      if (total_tests == 0) begin  // Only print config once
+        $display("Tolerance Configuration:");
+        $display("  Mode: %s", TOLERANCE_MODE);
+        $display("  Absolute Tolerance: %.6f", ABSOLUTE_TOLERANCE);
+        $display("  Relative Tolerance: %.2f%%", RELATIVE_TOLERANCE * 100.0);
+        $display("  Tolerance Enabled: %s\n", ENABLE_TOLERANCE ? "YES" : "NO");
+      end
     end
   endtask
 
@@ -185,7 +188,6 @@ module TB_SystolicArray;
       @(posedge clk);
 
       data_count = 0;
-      // Read and write data sequentially as it appears in the file
       while (!$feof(
           file_handle
       )) begin
@@ -226,7 +228,6 @@ module TB_SystolicArray;
       @(posedge clk);
 
       data_count = 0;
-      // Read and write data sequentially as it appears in the file
       while (!$feof(
           file_handle
       )) begin
@@ -262,7 +263,6 @@ module TB_SystolicArray;
       end
 
       data_count = 0;
-      // Read data in row-major order
       for (row = 0; row < N; row++) begin
         for (col = 0; col < N; col++) begin
           scan_result = $fscanf(file_handle, "%h", temp_data);
@@ -273,7 +273,6 @@ module TB_SystolicArray;
           end
           expected_result[row][col] = temp_data;
           data_count++;
-          $display("Expected[%0d][%0d] = 0x%08x (%0d)", row, col, temp_data, $signed(temp_data));
         end
       end
 
@@ -286,13 +285,11 @@ module TB_SystolicArray;
     begin
       $display("Waiting for OutputSram to complete data collection...");
 
-      // Wait for collection to start
       while (!collection_active) begin
         @(posedge clk);
       end
       $display("OutputSram collection started...");
 
-      // Wait for collection to complete
       while (!collection_complete) begin
         @(posedge clk);
       end
@@ -300,27 +297,24 @@ module TB_SystolicArray;
     end
   endtask
 
-  task verify_output_sram_results();
+  task verify_output_sram_results(input int test_idx);
     logic exact_match, tolerance_match;
     string tolerance_info;
     reg [DATA_WIDTH-1:0] actual_result;
     integer sram_addr;
     begin
-      $display("--- Verifying OutputSram Results ---");
+      $display("--- Verifying OutputSram Results (Set %0d) ---", test_idx);
 
       for (int i = 0; i < N; i++) begin
         for (int j = 0; j < N; j++) begin
           total_tests++;
 
-          // Calculate row-major address
           sram_addr   = i * N + j;
 
-          // Read from OutputSram
           read_enable = 1;
           read_addr   = sram_addr;
           @(posedge clk);
 
-          // Wait for valid data
           while (!read_valid) begin
             @(posedge clk);
           end
@@ -329,10 +323,8 @@ module TB_SystolicArray;
           read_enable   = 0;
           @(posedge clk);
 
-          // Check for exact match first
           exact_match = (actual_result == expected_result[i][j]);
 
-          // Check tolerance if enabled and exact match failed
           if (!exact_match && ENABLE_TOLERANCE) begin
             tolerance_match = check_tolerance(expected_result[i][j], actual_result, tolerance_info);
           end else begin
@@ -340,13 +332,10 @@ module TB_SystolicArray;
             tolerance_info  = "N/A";
           end
 
-          // Report results
           if (exact_match || tolerance_match) begin
             if (exact_match) begin
-              $display(
-                  "PASS: Result[%0d][%0d] (SRAM[%0d]) - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [EXACT MATCH]",
-                  i, j, sram_addr, expected_result[i][j], $signed(expected_result[i][j]),
-                  actual_result, $signed(actual_result));
+              // Commented out to reduce spam for large runs, uncomment if needed
+              // $display("PASS: [%0d][%0d] Expected: 0x%08x, Actual: 0x%08x [EXACT]", i, j, expected_result[i][j], actual_result);
             end else begin
               $display(
                   "PASS: Result[%0d][%0d] (SRAM[%0d]) - Expected: 0x%08x (%0d), Actual: 0x%08x (%0d) [TOLERANCE: %s]",
@@ -378,9 +367,9 @@ module TB_SystolicArray;
     reg [DATA_WIDTH-1:0] sram_data;
     integer sram_addr;
     begin
-      $display("--- OutputSram Contents (Row-Major Order) ---");
-
-      for (int i = 0; i < N; i++) begin
+      $display("--- OutputSram Contents Preview (First Row) ---");
+      // Only showing first row to avoid log explosion in multi-test mode
+      for (int i = 0; i < 1; i++) begin
         $write("Row %0d: ", i);
         for (int j = 0; j < N; j++) begin
           sram_addr   = i * N + j;
@@ -401,25 +390,25 @@ module TB_SystolicArray;
         end
         $write("\n");
       end
-      $display("--- End of OutputSram Contents ---");
+      $display("... (remaining rows hidden)");
     end
   endtask
 
-  task execute_output_sram_matrix_test();
+  task execute_output_sram_matrix_test(input string file_a, input string file_b,
+                                       input string file_c, input int test_idx);
     begin
-      $display("\n=== %s ===", test_name);
-      $display("Input A file: %s", INPUT_A_FILE);
-      $display("Input B file: %s", INPUT_B_FILE);
-      $display("Expected output file: %s", EXPECTED_OUTPUT_FILE);
+      $display("\n=== %s (Set %0d) ===", test_name, test_idx);
+      $display("Input A file: %s", file_a);
+      $display("Input B file: %s", file_b);
+      $display("Expected output file: %s", file_c);
 
-      load_expected_results(EXPECTED_OUTPUT_FILE);
+      load_expected_results(file_c);
 
       apply_reset();
 
-      // Write data files to the input queues
       fork
-        write_file_to_west(INPUT_A_FILE);
-        write_file_to_north(INPUT_B_FILE);
+        write_file_to_west(file_a);
+        write_file_to_north(file_b);
       join
 
       repeat (10) @(posedge clk);
@@ -431,36 +420,28 @@ module TB_SystolicArray;
 
       wait_for_output_sram_collection();
 
-      display_output_sram_contents();
+      // Optional: Display contents (restricted to 1st row inside task to save space)
+      // display_output_sram_contents(); 
 
-      verify_output_sram_results();
+      verify_output_sram_results(test_idx);
 
-      $display("=== %s COMPLETED ===\n", test_name);
+      $display("=== Set %0d COMPLETED ===\n", test_idx);
     end
   endtask
 
-  task print_test_summary();
+  task print_global_summary();
     automatic real pass_rate = (total_tests > 0) ? (test_pass_count * 100.0) / total_tests : 0.0;
     automatic
     real
     tolerance_rate = (test_pass_count > 0) ? (tolerance_pass_count * 100.0) / test_pass_count : 0.0;
     begin
       $display("\n" + "=" * 60);
-      $display("SYSTOLIC ARRAY WITH OUTPUT SRAM TEST SUMMARY");
+      $display("SYSTOLIC ARRAY MULTI-SET TEST SUMMARY");
       $display("=" * 60);
-      $display("Test: %s", test_name);
-      $display("Input A: %s", INPUT_A_FILE);
-      $display("Input B: %s", INPUT_B_FILE);
-      $display("Expected: %s", EXPECTED_OUTPUT_FILE);
+      $display("Total Sets Run: %0d", NUM_TEST_SETS);
       $display("-" * 60);
-      $display("TOLERANCE CONFIGURATION:");
-      $display("  Mode: %s", TOLERANCE_MODE);
-      $display("  Absolute Tolerance: %.6f", ABSOLUTE_TOLERANCE);
-      $display("  Relative Tolerance: %.2f%%", RELATIVE_TOLERANCE * 100.0);
-      $display("  Tolerance Enabled: %s", ENABLE_TOLERANCE ? "YES" : "NO");
-      $display("-" * 60);
-      $display("TEST RESULTS:");
-      $display("  Total Tests: %0d", total_tests);
+      $display("GLOBAL RESULTS:");
+      $display("  Total Matrix Elements Checked: %0d", total_tests);
       $display("  Passed: %0d", test_pass_count);
       $display("  Failed: %0d", test_fail_count);
       $display("  Pass Rate: %.1f%%", pass_rate);
@@ -475,24 +456,43 @@ module TB_SystolicArray;
     end
   endtask
 
-  // Main test stimulus
   initial begin
-    $display("Testing SystolicArray module with integrated OutputSram\n");
+    string current_file_a;
+    string current_file_b;
+    string current_file_c;
+
+    $display("Testing SystolicArray module with integrated OutputSram");
+    $display("Number of Test Sets: %0d\n", NUM_TEST_SETS);
 
     initialize_signals();
 
-    execute_output_sram_matrix_test();
+    for (int i = 0; i < NUM_TEST_SETS; i++) begin
 
-    repeat (10) @(posedge clk);
+      if (NUM_TEST_SETS == 1) begin
+        // Legacy/Single mode: no suffix
+        current_file_a = "matrixA.mem";
+        current_file_b = "matrixB.mem";
+        current_file_c = "matrixC.mem";
+      end else begin
+        // Multi-mode: use suffix _0, _1, etc.
+        current_file_a = $sformatf("matrixA_%0d.mem", i);
+        current_file_b = $sformatf("matrixB_%0d.mem", i);
+        current_file_c = $sformatf("matrixC_%0d.mem", i);
+      end
 
-    print_test_summary();
+      execute_output_sram_matrix_test(current_file_a, current_file_b, current_file_c, i);
+
+      repeat (10) @(posedge clk);
+    end
+
+    print_global_summary();
     $finish;
   end
 
   initial begin
-    #10000000;
-    $display("ERROR: Testbench timeout after 10ms!");
-    print_test_summary();
+    #20000000;
+    $display("ERROR: Testbench timeout!");
+    print_global_summary();
     $finish;
   end
 
@@ -502,4 +502,3 @@ module TB_SystolicArray;
   end
 
 endmodule
-

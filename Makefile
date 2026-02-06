@@ -32,7 +32,7 @@ VERILATOR_FLAGS = \
 	--trace \
 	--timing \
 	--top-module $(TOP_MODULE) \
-	--threads $(shell nproc) \
+	--threads 8 \
 	--sv \
 	-I$(SRC_DIR) \
 	-I$(TB_DIR) \
@@ -65,8 +65,8 @@ verilator:
 	@echo "-- Compiling Verilator simulation"
 	make -C $(VERILATOR_DIR) -f V$(TOP_MODULE).mk
 	@echo "-- Copying test files"
-		@if ls $(TB_DIR)/*.mem 1> /dev/null 2>&1; then \
-		cp $(TB_DIR)/*.mem $(VERILATOR_DIR); \
+		@if ls $(TB_DIR)/stimulus/*.mem 1> /dev/null 2>&1; then \
+		cp $(TB_DIR)/stimulus/*.mem $(VERILATOR_DIR); \
 		fi
 	@echo "-- Running Verilator simulation"
 	cd $(VERILATOR_DIR) && ./$(TOP_MODULE)_sim

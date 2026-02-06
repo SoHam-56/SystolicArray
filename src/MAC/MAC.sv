@@ -103,16 +103,6 @@ module MAC #(
     end
   end
 
-  // multiply_32 MUL (
-  //     .clk_i(clk_i),
-  //     .rstn_i(rstn_i),
-  //     .valid_i(mul_valid_pulse),
-  //     .A(mul_in1),
-  //     .B(mul_in2),
-  //     .Result(mul_result),
-  //     .done_o(mul_done)
-  // );
-
   fp32Multiplier MUL (
       .clk_i      (clk_i),
       .rstn_i     (rstn_i),
