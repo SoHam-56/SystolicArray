@@ -116,27 +116,27 @@ module MAC #(
       .invalid_o  ()
   );
 
-  Adder_32 ADD (
-      .clk_i(clk_i),
-      .rstn_i(rstn_i),
-      .valid_i(add_valid_pulse),
-      .A(add_in1),
-      .B(add_in2),
-      .Result(adder_result),
-      .done_o(add_done)
-  );
-
-  // fp32Adder ADD (
-  //     .clk_i      (clk_i),
-  //     .rstn_i     (rstn_i),
-  //     .valid_i    (add_valid_pulse),
-  //     .A          (add_in1),
-  //     .B          (add_in2),
-  //     .result_o   (adder_result),
-  //     .done_o     (add_done),
-  //     .overflow_o (),
-  //     .underflow_o(),
-  //     .invalid_o  ()
+  // Adder_32 ADD (
+  //     .clk_i(clk_i),
+  //     .rstn_i(rstn_i),
+  //     .valid_i(add_valid_pulse),
+  //     .A(add_in1),
+  //     .B(add_in2),
+  //     .Result(adder_result),
+  //     .done_o(add_done)
   // );
+
+  fp32Adder ADD (
+      .clk_i      (clk_i),
+      .rstn_i     (rstn_i),
+      .valid_i    (add_valid_pulse),
+      .A          (add_in1),
+      .B          (add_in2),
+      .result_o   (adder_result),
+      .done_o     (add_done),
+      .overflow_o (),
+      .underflow_o(),
+      .invalid_o  ()
+  );
 
 endmodule

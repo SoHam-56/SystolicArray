@@ -9,20 +9,23 @@ VVP = vvp
 WAVE = surfer
 
 DESIGN_FILES = \
-	SystolicArray.sv \
-	RowInputQueue.sv \
-	ColumnInputQueue.sv \
-	Mesh.sv \
-	OutputSram.sv \
-	ProcessingElement.sv \
-	../ArithmeticLibrary/Multipliers/FP32/src/R4Booth.sv \
-	../ArithmeticLibrary/Multipliers/FP32/src/karatsubaUnsigned.sv \
+  top/SystolicMesh.sv \
+  top/SystolicArray.sv \
+  mem/RowInputQueue.sv \
+  mem/ColumnInputQueue.sv \
+  mem/OutputSram.sv \
+  mem/MeshOutputSram.sv \
+  engine/PEMesh.sv \
+  engine/ProcessingElement.sv \
+  engine/AccumulationUnit.sv \
+  engine/MAC.sv \
+  ../ArithmeticLibrary/Multipliers/FP32/src/R4Booth.sv \
+  ../ArithmeticLibrary/Multipliers/FP32/src/karatsubaUnsigned.sv \
 	../ArithmeticLibrary/Multipliers/FP32/src/fp32Multiplier.sv \
-	MAC/Adder_FP32.sv \
-	MAC/LZC.sv \
-	MAC/MAC.sv
+  ../ArithmeticLibrary/Adders/FP32/src/LZC.sv \
+  ../ArithmeticLibrary/Adders/FP32/src/fp32Adder.sv
 
-TOP_MODULE = TB_SystolicArray
+TOP_MODULE = TB_SystolicMesh
 TESTBENCH = $(TOP_MODULE).sv
 
 VERILATOR_DIR = $(PRJ_DIR)/Verilator

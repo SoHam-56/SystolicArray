@@ -11,7 +11,6 @@ module SystolicMesh #(
     input logic rstn_i,
     input logic start_matrix_mult_i,
 
-    // Global Inputs
     input logic                  north_write_enable_i,
     input logic [DATA_WIDTH-1:0] north_write_data_i,
     input logic                  north_write_reset_i,
@@ -19,14 +18,12 @@ module SystolicMesh #(
     input logic [DATA_WIDTH-1:0] west_write_data_i,
     input logic                  west_write_reset_i,
 
-    // Global Status
     output logic north_queue_empty_o,
     output logic west_queue_empty_o,
     output logic matrix_mult_complete_o,
     output logic collection_complete_o,
     output logic collection_active_o,
 
-    // Unified Read Interface
     input  logic                  read_enable_i,
     input  logic [          31:0] read_addr_i,
     output logic [DATA_WIDTH-1:0] read_data_o,
@@ -36,10 +33,8 @@ module SystolicMesh #(
   localparam TILES_PER_DIM = MATRIX_SIZE / TILE_SIZE;
   localparam GLOBAL_ELEMENTS = MATRIX_SIZE * MATRIX_SIZE;
   localparam TILE_ELEMENTS = TILE_SIZE * TILE_SIZE;
+  localparam NUM_TILES = TILES_PER_DIM * TILES_PER_DIM;
 
-  // =========================================================================
-  // 1. Global Input Buffers (Storage -> always_ff)
-  // =========================================================================
   logic [DATA_WIDTH-1:0] mem_A[0:GLOBAL_ELEMENTS-1];
   logic [DATA_WIDTH-1:0] mem_B[0:GLOBAL_ELEMENTS-1];
   logic [$clog2(GLOBAL_ELEMENTS):0] ptr_A, ptr_B;
@@ -62,11 +57,8 @@ module SystolicMesh #(
     end
   end
   assign west_queue_empty_o  = (ptr_A == 0);
-  assign north_queue_empty_o = (ptr_B == 0);
+  assign north_queue_empty_o = (ptr_B == 1);
 
-  // =========================================================================
-  // 2. Main FSM Controller
-  // =========================================================================
   typedef enum logic [2:0] {
     IDLE,
     RESET_SEQ,
@@ -79,15 +71,12 @@ module SystolicMesh #(
   } state_t;
   state_t current_state, next_state;
 
-  // FSM Inputs (Status)
   logic loading_done;
   logic all_tiles_collected;
   logic all_reducers_done;
 
-  // FSM Outputs (Control Signals -> Combinational)
   logic ctrl_reset_all, ctrl_load_en, ctrl_fire_pulse, ctrl_reduce_pulse, ctrl_done_signal;
 
-  // Interconnects
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][TILES_PER_DIM-1:0] tile_col_done;
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][TILES_PER_DIM-1:0] tile_col_active;
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0] reducer_done;
@@ -97,7 +86,6 @@ module SystolicMesh #(
   assign all_tiles_collected = &tile_col_done;
   assign all_reducers_done = &reducer_done;
 
-  // --- FSM Combinational (Next State & Outputs) ---
   always_comb begin
     next_state = current_state;
     ctrl_reset_all = 0;
@@ -134,7 +122,6 @@ module SystolicMesh #(
     endcase
   end
 
-  // --- FSM Sequential (State & Datapath Registers) ---
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0] load_we_A, load_we_B;
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][DATA_WIDTH-1:0] load_data_A, load_data_B;
   logic tiles_global_start;
@@ -150,16 +137,12 @@ module SystolicMesh #(
       matrix_mult_complete_o <= 0;
     end else begin
       current_state <= next_state;
-
-      // Output Register Updates
       matrix_mult_complete_o <= ctrl_done_signal;
-      tiles_global_start <= ctrl_fire_pulse;  // Register the pulse for clean timing
+      tiles_global_start <= ctrl_fire_pulse;
 
-      // Counter Update
       if (ctrl_reset_all) load_idx <= 0;
       else if (ctrl_load_en && !loading_done) load_idx <= load_idx + 1;
 
-      // Broadcast Logic (Registered for Timing)
       load_we_A <= '{default: 0};
       load_we_B <= '{default: 0};
       if (ctrl_load_en) begin
@@ -183,24 +166,48 @@ module SystolicMesh #(
     end
   end
 
-  // =========================================================================
-  // 3. Instantiation
-  // =========================================================================
+  logic [NUM_TILES-1:0]                 sram_we_agg;
+  logic [NUM_TILES-1:0][          31:0] sram_addr_agg;
+  logic [NUM_TILES-1:0][DATA_WIDTH-1:0] sram_data_agg;
+
+  MeshOutputSram #(
+      .DEPTH(GLOBAL_ELEMENTS),
+      .DATA_WIDTH(DATA_WIDTH),
+      .NUM_PORTS(NUM_TILES)
+  ) output_mem (
+      .clk_i(clk_i),
+      .rstn_i(rstn_i),
+      .we_i(sram_we_agg),
+      .waddr_i(sram_addr_agg),
+      .wdata_i(sram_data_agg),
+      .read_enable_i(read_enable_i),
+      .read_addr_i(read_addr_i),
+      .read_data_o(read_data_o),
+      .read_valid_o(read_valid_o)
+  );
+
+  assign collection_complete_o = all_reducers_done;
+  assign collection_active_o   = (current_state == WAIT_REDUCE);
+
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][TILES_PER_DIM-1:0]                 t_ren;
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][          31:0] t_addr;
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][DATA_WIDTH-1:0] t_data;
   logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][TILES_PER_DIM-1:0]                 t_valid;
-  logic [TILES_PER_DIM-1:0][TILES_PER_DIM-1:0][   DATA_WIDTH-1:0]                 final_data;
 
   genvar i, j, k;
   generate
     for (i = 0; i < TILES_PER_DIM; i++) begin : ROW
       for (j = 0; j < TILES_PER_DIM; j++) begin : COL
 
+        localparam TILE_IDX = i * TILES_PER_DIM + j;
+
         AccumulationUnit #(
             .P(TILES_PER_DIM),
             .N(TILE_SIZE),
-            .DATA_WIDTH(DATA_WIDTH)
+            .DATA_WIDTH(DATA_WIDTH),
+            .MATRIX_WIDTH(MATRIX_SIZE),
+            .TILE_ROW_OFFSET(i * TILE_SIZE),
+            .TILE_COL_OFFSET(j * TILE_SIZE)
         ) acc_unit (
             .clk_i(clk_i),
             .rstn_i(rstn_i),
@@ -209,8 +216,11 @@ module SystolicMesh #(
             .tile_valid_i(t_valid[i][j]),
             .tile_ren_o(t_ren[i][j]),
             .tile_addr_o(t_addr[i][j]),
-            .ext_addr_i(read_addr_i % TILE_ELEMENTS),
-            .ext_data_o(final_data[i][j]),
+
+            .write_en_o  (sram_we_agg[TILE_IDX]),
+            .write_addr_o(sram_addr_agg[TILE_IDX]),
+            .write_data_o(sram_data_agg[TILE_IDX]),
+
             .done_o(reducer_done[i][j])
         );
 
@@ -244,199 +254,5 @@ module SystolicMesh #(
       end
     end
   endgenerate
-
-  // Output Mux
-  integer sel_i, sel_j;
-  always_comb begin
-    sel_i = (read_addr_i / MATRIX_SIZE) / TILE_SIZE;
-    sel_j = (read_addr_i % MATRIX_SIZE) / TILE_SIZE;
-    if (sel_i >= TILES_PER_DIM) sel_i = 0;
-    if (sel_j >= TILES_PER_DIM) sel_j = 0;
-    read_data_o = final_data[sel_i][sel_j];
-  end
-
-  assign collection_complete_o = &reducer_done;
-  assign collection_active_o   = !(&reducer_done) && (current_state == WAIT_REDUCE);
-  always_ff @(posedge clk_i) read_valid_o <= read_enable_i;
-
-endmodule
-
-// =============================================================================
-// SUBMODULE: Accumulation Unit (Refactored for Comb Outputs / Seq Registers)
-// =============================================================================
-module AccumulationUnit #(
-    parameter P = 8,
-    parameter N = 4,
-    parameter DATA_WIDTH = 32
-) (
-    input logic clk_i,
-    rstn_i,
-    start_i,
-
-    // Tiles Interface
-    input  logic [P-1:0][DATA_WIDTH-1:0] tile_data_i,
-    input  logic [P-1:0]                 tile_valid_i,
-    output logic [P-1:0]                 tile_ren_o,
-    output logic [P-1:0][          31:0] tile_addr_o,
-
-    // External Interface
-    input logic [31:0] ext_addr_i,
-    output logic [DATA_WIDTH-1:0] ext_data_o,
-    output logic done_o
-);
-  localparam PIXELS = N * N;
-
-  // Registers (Must be in always_ff)
-  logic [DATA_WIDTH-1:0] mem[0:PIXELS-1];
-  logic [DATA_WIDTH-1:0] acc, op_b;
-  integer p_idx, k_idx;
-
-  // FSM States
-  typedef enum logic [2:0] {
-    RIDLE,
-    REQ_TILE,
-    WAIT_VAL,
-    ADD_TRIG,
-    ADD_WAIT,
-    NEXT_K,
-    SAVE_RES,
-    RDONE
-  } rstate_t;
-  rstate_t r_curr, r_next;
-
-  // Adder Interface
-  logic add_pulse, add_done;
-  logic [DATA_WIDTH-1:0] add_res;
-
-  fp32Adder adder (
-      .clk_i(clk_i),
-      .rstn_i(rstn_i),
-      .valid_i(add_pulse),
-      .A(acc),
-      .B(op_b),
-      .result_o(add_res),
-      .done_o(add_done)
-  );
-
-  // Control Signals (Generated in Comb, used in FF)
-  logic c_clr_vars, c_inc_k, c_inc_pix;
-  logic c_latch_b, c_upd_acc, c_mem_we;
-
-  // =========================================================================
-  // A. Combinational Logic: Next State & OUTPUTS
-  // =========================================================================
-  always_comb begin
-    r_next = r_curr;
-
-    // Default Outputs (Mealy/Moore style)
-    tile_ren_o = 0;
-    tile_addr_o = '{default: 0};
-    add_pulse = 0;
-    done_o = 0;
-
-    // Default Internal Controls
-    c_clr_vars = 0;
-    c_inc_k = 0;
-    c_inc_pix = 0;
-    c_latch_b = 0;
-    c_upd_acc = 0;
-    c_mem_we = 0;
-
-    // Drive address bus based on current index
-    tile_addr_o[k_idx] = p_idx;
-
-    case (r_curr)
-      RIDLE: begin
-        if (start_i) begin
-          c_clr_vars = 1;
-          r_next = REQ_TILE;
-        end
-      end
-
-      REQ_TILE: begin
-        tile_ren_o[k_idx] = 1;  // Pure Combinational Output
-        r_next = WAIT_VAL;
-      end
-
-      WAIT_VAL: begin
-        if (tile_valid_i[k_idx]) begin
-          c_latch_b = 1;
-          r_next = ADD_TRIG;
-        end
-      end
-
-      ADD_TRIG: begin
-        add_pulse = 1;  // Pure Combinational Output
-        r_next = ADD_WAIT;
-      end
-
-      ADD_WAIT: begin
-        if (add_done) begin
-          c_upd_acc = 1;
-          r_next = NEXT_K;
-        end
-      end
-
-      NEXT_K: begin
-        if (k_idx < P - 1) begin
-          c_inc_k = 1;
-          r_next  = REQ_TILE;
-        end else begin
-          r_next = SAVE_RES;
-        end
-      end
-
-      SAVE_RES: begin
-        c_mem_we = 1;
-        if (p_idx < PIXELS - 1) begin
-          c_inc_pix = 1;
-          r_next = REQ_TILE;
-        end else begin
-          r_next = RDONE;
-        end
-      end
-
-      RDONE: begin
-        done_o = 1;  // Pure Combinational Output
-      end
-
-      default: r_next = RIDLE;
-    endcase
-  end
-
-  // =========================================================================
-  // B. Sequential Logic: State & Register Updates
-  // =========================================================================
-  always_ff @(posedge clk_i or negedge rstn_i) begin
-    if (!rstn_i) begin
-      r_curr <= RIDLE;
-      p_idx <= 0;
-      k_idx <= 0;
-      acc <= 0;
-      op_b <= 0;
-    end else begin
-      r_curr <= r_next;
-
-      // Counters
-      if (c_clr_vars) begin
-        p_idx <= 0;
-        k_idx <= 0;
-        acc   <= 0;
-      end
-      if (c_inc_k) k_idx <= k_idx + 1;
-      if (c_inc_pix) begin
-        p_idx <= p_idx + 1;
-        k_idx <= 0;
-        acc   <= 0;
-      end
-
-      // Registers
-      if (c_latch_b) op_b <= tile_data_i[k_idx];
-      if (c_upd_acc) acc <= add_res;
-      if (c_mem_we) mem[p_idx] <= acc;
-    end
-  end
-
-  assign ext_data_o = mem[ext_addr_i];
 
 endmodule

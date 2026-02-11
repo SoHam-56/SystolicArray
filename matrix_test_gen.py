@@ -14,7 +14,7 @@ def generate_test_vectors(
     rows_A,
     cols_A,
     cols_B,
-    testbench_dir="testbenches",
+    testbench_dir="testbenches/stimulus",
     seed=None,
     matrix_type="random",
     value_range=(-1.0, 1.0),
@@ -112,7 +112,7 @@ def main():
     parser.add_argument(
         "--testbench-dir",
         type=str,
-        default="testbenches",
+        default="testbenches/stimulus",
         help="Directory for expected result matrix C",
     )
     parser.add_argument("--seed", type=int, default=42, help="Base Random seed")
