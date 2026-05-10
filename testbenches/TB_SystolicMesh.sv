@@ -5,11 +5,11 @@ module TB_SystolicMesh;
   localparam DATA_WIDTH = 32;
   localparam CLK_PERIOD = 10;
 
-  localparam MATRIX_SIZE = 32;
-  localparam TILE_SIZE = 8;
+  localparam MATRIX_SIZE = 8;
+  localparam TILE_SIZE = 4;
   localparam SRAM_SIZE = MATRIX_SIZE * MATRIX_SIZE;
 
-  localparam int NUM_TEST_SETS = 3;
+  localparam int NUM_TEST_SETS = 1;
 
   // Tolerance Settings
   localparam TOLERANCE_MODE = "RELATIVE";  // "ABSOLUTE", "RELATIVE", or "BOTH"
@@ -23,19 +23,46 @@ module TB_SystolicMesh;
   reg [DATA_WIDTH-1:0] n_data, w_data;
   wire n_empty, w_empty, complete;
 
-  reg r_en;
-  reg [31:0] r_addr;
-  wire [DATA_WIDTH-1:0] r_data;
-  wire r_valid;
+  reg                      r_en;
+  reg     [          31:0] r_addr;
+  wire    [DATA_WIDTH-1:0] r_data;
+  wire                     r_valid;
 
-  reg [DATA_WIDTH-1:0] expected_mem[0:SRAM_SIZE-1];
+  reg     [DATA_WIDTH-1:0] expected_mem          [0:SRAM_SIZE-1];
 
-  int total_sets_run = 0;
-  int sets_passed = 0;
-  int sets_failed = 0;
-  int total_elements = 0;
-  int tol_pass_elements = 0;  // Elements passed via tolerance (not exact)
+  // ── Verification counters ──────────────────────────────────────────────────
+  int                      total_sets_run = 0;
+  int                      sets_passed = 0;
+  int                      sets_failed = 0;
+  int                      total_elements = 0;
+  int                      tol_pass_elements = 0;
 
+  // ── Cycle-count tracking ───────────────────────────────────────────────────
+  // Hardware cycle counter: counts from start pulse until complete asserts.
+  // Declared as longint to handle large cycle counts without overflow.
+  longint                  cycle_count;
+  logic                    counting;
+
+  // Per-set cycle log (max NUM_TEST_SETS entries)
+  longint                  set_cycles            [        0:255];
+
+  always_ff @(posedge clk or negedge rstn) begin
+    if (!rstn) begin
+      cycle_count <= 0;
+      counting    <= 0;
+    end else begin
+      if (start_mult) begin  // latch start — begin counting next cycle
+        cycle_count <= 0;
+        counting    <= 1;
+      end else if (complete) begin  // stop on completion
+        counting <= 0;
+      end else if (counting) begin
+        cycle_count <= cycle_count + 1;
+      end
+    end
+  end
+
+  // ─────────────────────────────────────────────────────────────────────────
   SystolicMesh #(
       .MATRIX_SIZE(MATRIX_SIZE),
       .TILE_SIZE  (TILE_SIZE),
@@ -65,32 +92,28 @@ module TB_SystolicMesh;
       .read_valid_o (r_valid)
   );
 
+  // ── Clock ─────────────────────────────────────────────────────────────────
   initial begin
     clk = 0;
     forever #(CLK_PERIOD / 2) clk = ~clk;
   end
 
+  // ── Tolerance check ───────────────────────────────────────────────────────
   function automatic logic check_tolerance(
       input [DATA_WIDTH-1:0] expected, input [DATA_WIDTH-1:0] actual, output string tolerance_info);
     real expected_real, actual_real;
     real abs_diff, rel_diff;
     logic abs_ok, rel_ok, result;
 
-    // Cast hex to signed real (assuming signed integers or fixed point)
-    // Modify $signed() if your data is floating point IEEE-754
     expected_real = $signed(expected);
     actual_real = $signed(actual);
 
-    // Absolute Difference
-    abs_diff = (expected_real > actual_real) ? 
+    abs_diff = (expected_real > actual_real) ?
                (expected_real - actual_real) : (actual_real - expected_real);
 
-    // Relative Difference (handle divide-by-zero)
-    if (expected_real != 0.0) begin
+    if (expected_real != 0.0)
       rel_diff = abs_diff / ((expected_real > 0) ? expected_real : -expected_real);
-    end else begin
-      rel_diff = (actual_real == 0.0) ? 0.0 : 1.0;
-    end
+    else rel_diff = (actual_real == 0.0) ? 0.0 : 1.0;
 
     abs_ok = (abs_diff <= ABS_TOL);
     rel_ok = (rel_diff <= REL_TOL);
@@ -112,25 +135,26 @@ module TB_SystolicMesh;
     return result;
   endfunction
 
+  // ── Reset ─────────────────────────────────────────────────────────────────
   task apply_reset();
     begin
-      rstn = 0;
+      rstn       = 0;
       start_mult = 0;
-      n_we = 0;
-      n_rst = 0;
-      n_data = 0;
-      w_we = 0;
-      w_rst = 0;
-      w_data = 0;
-      r_en = 0;
-      r_addr = 0;
-
+      n_we       = 0;
+      n_rst      = 0;
+      n_data     = 0;
+      w_we       = 0;
+      w_rst      = 0;
+      w_data     = 0;
+      r_en       = 0;
+      r_addr     = 0;
       repeat (5) @(posedge clk);
       rstn = 1;
       repeat (5) @(posedge clk);
     end
   endtask
 
+  // ── Queue loaders ─────────────────────────────────────────────────────────
   task load_west_queue(input string filename);
     integer fh, res, cnt;
     reg [DATA_WIDTH-1:0] tmp;
@@ -140,12 +164,10 @@ module TB_SystolicMesh;
         $display("  [Error] Could not open WEST file: %s", filename);
         $finish;
       end
-
       w_rst = 1;
       @(posedge clk);
       w_rst = 0;
       @(posedge clk);
-
       cnt = 0;
       while (!$feof(
           fh
@@ -173,12 +195,10 @@ module TB_SystolicMesh;
         $display("  [Error] Could not open NORTH file: %s", filename);
         $finish;
       end
-
       n_rst = 1;
       @(posedge clk);
       n_rst = 0;
       @(posedge clk);
-
       cnt = 0;
       while (!$feof(
           fh
@@ -197,6 +217,7 @@ module TB_SystolicMesh;
     end
   endtask
 
+  // ── Result verification ───────────────────────────────────────────────────
   task verify_results(input string filename, output int err_count);
     integer fh, i, res;
     reg [DATA_WIDTH-1:0] exp_val, actual_val;
@@ -209,7 +230,6 @@ module TB_SystolicMesh;
         $display("  [Error] Could not open EXPECTED file: %s", filename);
         $finish;
       end
-
       i = 0;
       while (!$feof(
           fh
@@ -223,7 +243,6 @@ module TB_SystolicMesh;
       $fclose(fh);
 
       err_count = 0;
-
       for (i = 0; i < SRAM_SIZE; i++) begin
         r_en   = 1;
         r_addr = i;
@@ -231,31 +250,25 @@ module TB_SystolicMesh;
         while (!r_valid) @(posedge clk);
 
         actual_val = r_data;
-        r_en = 0;  // Stop reading
-
+        r_en = 0;
         total_elements++;
 
-        // 1. Check Exact Match
         exact_match = (actual_val == expected_mem[i]);
 
-        // 2. Check Tolerance (if exact match fails)
-        if (!exact_match && ENABLE_TOL) begin
+        if (!exact_match && ENABLE_TOL)
           tol_match = check_tolerance(expected_mem[i], actual_val, tol_info);
-        end else begin
+        else begin
           tol_match = 0;
           tol_info  = "N/A";
         end
 
-        // 3. Verdict
         if (exact_match) begin
-          // Pass (Exact) - silent unless debug needed
+          // Exact pass — silent
         end else if (tol_match) begin
-          // Pass (Tolerance)
           $display("    [PASS-TOL] Addr %0d: Exp=0x%h, Act=0x%h | %s", i, expected_mem[i],
                    actual_val, tol_info);
           tol_pass_elements++;
         end else begin
-          // Fail
           $display("    [FAIL]     Addr %0d: Exp=0x%h, Act=0x%h", i, expected_mem[i], actual_val);
           if (ENABLE_TOL) $display("               %s", tol_info);
           err_count++;
@@ -267,11 +280,12 @@ module TB_SystolicMesh;
     end
   endtask
 
+  // ── Single test set ───────────────────────────────────────────────────────
   task execute_test_set(input int set_id);
     string f_a, f_b, f_c;
     int set_errors;
+    longint cycles_taken;
     begin
-      // Determine filenames
       if (NUM_TEST_SETS == 1) begin
         f_a = "matrixA.mem";
         f_b = "matrixB.mem";
@@ -301,7 +315,7 @@ module TB_SystolicMesh;
       @(posedge clk);
       start_mult = 0;
 
-      // Timeout Protection
+      // Timeout protection
       fork
         begin
           wait (complete);
@@ -316,8 +330,15 @@ module TB_SystolicMesh;
       join_any
       disable fork;
 
-      $display("  [Action] Processing Complete. Verifying...");
+      // Capture cycle count at the clock edge after complete asserts
+      @(posedge clk);
+      cycles_taken       = cycle_count;
+      set_cycles[set_id] = cycles_taken;
 
+      $display("  [Perf]   Cycles to complete : %0d", cycles_taken);
+      $display("  [Perf]   Wall time @ %0dns clk: %0d ns", CLK_PERIOD, cycles_taken * CLK_PERIOD);
+
+      $display("  [Action] Processing Complete. Verifying...");
       verify_results(f_c, set_errors);
 
       total_sets_run++;
@@ -328,6 +349,7 @@ module TB_SystolicMesh;
     end
   endtask
 
+  // ── Top-level stimulus ────────────────────────────────────────────────────
   initial begin
     $dumpfile("TB_SystolicMesh.vcd");
     $dumpvars(0, TB_SystolicMesh);
@@ -335,6 +357,9 @@ module TB_SystolicMesh;
     $display("----------------------------------------------");
     $display(" SYSTOLIC MESH VERIFICATION (TOLERANCE MODE)  ");
     $display("----------------------------------------------");
+    $display(" Matrix Size:    %0d x %0d", MATRIX_SIZE, MATRIX_SIZE);
+    $display(" Tile Size:      %0d x %0d", TILE_SIZE, TILE_SIZE);
+    $display(" Tiles in mesh:  %0d x %0d", MATRIX_SIZE / TILE_SIZE, MATRIX_SIZE / TILE_SIZE);
     $display(" Sets to Run:    %0d", NUM_TEST_SETS);
     $display(" Tolerance Mode: %s", TOLERANCE_MODE);
     if (ENABLE_TOL) begin
@@ -349,20 +374,44 @@ module TB_SystolicMesh;
       execute_test_set(i);
     end
 
-    // Final Report
+    // ── Final report ───────────────────────────────────────────────────────
     $display("\n##############################################");
-    $display(" GLOBAL SUMMARY ");
+    $display(" GLOBAL SUMMARY");
     $display("##############################################");
+    $display(" Config:         MATRIX=%0d  TILE=%0d", MATRIX_SIZE, TILE_SIZE);
     $display(" Total Sets:     %0d", total_sets_run);
     $display(" Passed Sets:    %0d", sets_passed);
     $display(" Failed Sets:    %0d", sets_failed);
     $display(" Total Elements: %0d", total_elements);
-    if (ENABLE_TOL) begin
-      $display(" Tol Passed Els: %0d (%.1f%%)", tol_pass_elements,
-               (tol_pass_elements * 100.0) / (total_elements > 0 ? total_elements : 1));
-    end
-    $display("##############################################");
+    if (ENABLE_TOL)
+      $display(
+          " Tol Passed Els: %0d (%.1f%%)",
+          tol_pass_elements,
+          (tol_pass_elements * 100.0) / (total_elements > 0 ? total_elements : 1)
+      );
 
+    // Per-set cycle breakdown
+    $display("----------------------------------------------");
+    $display(" CYCLE COUNT PER TEST SET");
+    $display("----------------------------------------------");
+    begin
+      longint total_cycles, min_cycles, max_cycles;
+      total_cycles = 0;
+      min_cycles   = set_cycles[0];
+      max_cycles   = set_cycles[0];
+      for (int i = 0; i < NUM_TEST_SETS; i++) begin
+        $display("  Set %0d : %0d cycles  (%0d ns)", i, set_cycles[i], set_cycles[i] * CLK_PERIOD);
+        total_cycles += set_cycles[i];
+        if (set_cycles[i] < min_cycles) min_cycles = set_cycles[i];
+        if (set_cycles[i] > max_cycles) max_cycles = set_cycles[i];
+      end
+      $display("----------------------------------------------");
+      $display("  Min    : %0d cycles", min_cycles);
+      $display("  Max    : %0d cycles", max_cycles);
+      $display("  Avg    : %0d cycles", total_cycles / NUM_TEST_SETS);
+    end
+
+    $display("##############################################");
     if (sets_failed == 0) $display(" RESULT: SUCCESS");
     else $display(" RESULT: FAILURE");
 

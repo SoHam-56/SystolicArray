@@ -1,2 +1,5 @@
 Verilator/
 VIVADO*/
+testbenches/debug
+testbenches/results
+testbenches/stimulus
