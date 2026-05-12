@@ -8,6 +8,14 @@ VCS = vcs
 VVP = vvp
 WAVE = surfer
 
+REGRESSION_SCRIPT = $(PRJ_DIR)/regression.py
+MATRIX_SIZE       ?= 16
+REGRESSION_GROUP  ?= all
+FAST              ?= 0
+REGRESSION_OPTS   ?=
+
+_FAST_FLAG = $(if $(filter 1,$(FAST)),--fast)
+
 DESIGN_FILES = \
   top/SystolicMesh.sv \
   top/SystolicArray.sv \
@@ -119,4 +127,15 @@ clean:
 	-rm -f *.key DVEfiles
 	@echo "-- Clean complete"
 
-.PHONY: default verilator vcs wave lint debug perf clean
+regression:
+	@echo "=== SystolicMesh Regression Suite ==="
+	@echo "-- Matrix size : $(MATRIX_SIZE)"
+	@echo "-- Group       : $(REGRESSION_GROUP)"
+	@echo "-- Fast        : $(if $(filter 1,$(FAST)),yes,no)"
+	python3 $(REGRESSION_SCRIPT) \
+		--matrix-size $(MATRIX_SIZE) \
+		--group $(REGRESSION_GROUP) \
+		$(_FAST_FLAG) \
+		$(REGRESSION_OPTS)
+
+.PHONY: default verilator vcs wave lint debug perf clean regression

@@ -1,5 +1,6 @@
 Verilator/
 VIVADO*/
-testbenches/debug
-testbenches/results
-testbenches/stimulus
+testbenches/debug/
+testbenches/results/
+testbenches/stimulus/
+__pycache__/
