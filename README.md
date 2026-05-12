@@ -1,341 +1,116 @@
-# Systolic Array for Matrix Multiplication
+# SystolicMesh IP
 
-## 1. System Overview
+A parameterised, tile-scalable systolic-array matrix-multiplication engine in SystemVerilog, computing **C = A × B** over IEEE-754 Float32.
 
-This systolic array implementation performs matrix multiplication using a 2D grid of Processing Elements (PEs) arranged in an N×N configuration. For this analysis, we'll use N=3 as the example, creating a 3×3 systolic array that multiplies two 3×3 matrices.
+**Dependencies:** Verilator · Python ≥ 3.10 · NumPy
 
-The system consists of five major components:
-- **Input Queue System**: Two specialized queues that feed data into the array
-- **Processing Element Mesh**: 3×3 grid of computational units
-- **Wave Control System**: Manages result collection timing
-- **Output Collection System**: Gathers and stores final results
-- **Control and Status Logic**: Coordinates overall operation
+---
 
-## 2. Data Organization and Memory Layout
+## Architecture
 
-### 2.1 Input Matrix Storage
+![SystolicMesh Architecture](Mesh.png)
 
-**Matrix A (Rows - West Input)**
-```
-Matrix A = [a00 a01 a02]    Stored as: PE0: [a00, a01, a02]
-           [a10 a11 a12] ────────────→ PE1: [a10, a11, a12]
-           [a20 a21 a22]               PE2: [a20, a21, a22]
+### Systolic Mesh
 
-Memory Layout: [a00, a01, a02, a10, a11, a12, a20, a21, a22]
-Addresses:     [ 0,   1,   2,   3,   4,   5,   6,   7,   8]
-```
+The top-level module is a 2-D grid of Systolic Arrays. A-matrix rows are streamed in from a left-side SRAM; B-matrix columns (weights) from a top SRAM. Each row of arrays drives a shared row accumulator, and the final C matrix is written to a right-side output SRAM.
 
-**Matrix B (Columns - North Input)**
-```
-Matrix B = [b00 b01 b02]    Stored as: PE0: [b00, b10, b20]
-           [b10 b11 b12] ────────────→ PE1: [b01, b11, b21]
-           [b20 b21 b22]               PE2: [b02, b12, b22]
+The mesh is parameterised by `MATRIX_SIZE = N` and `TILE_SIZE = T`. The full N×N problem is decomposed into a `(N/T)³` grid of T×T tiles — `(N/T)²` spatial positions each with `N/T` depth slices — whose partial sums are reduced by the AccumulationUnit.
 
-Memory Layout: [b00, b01, b02, b10, b11, b12, b20, b21, b22]
-Addresses:     [ 0,   1,   2,   3,   4,   5,   6,   7,   8]
-```
+### Systolic Array
 
-### 2.2 Processing Element Grid Layout
+Each Systolic Array is a T×T mesh of Processing Elements. Rather than all PEs computing simultaneously, computation propagates as a **diagonal wavefront** — PE(0,0) starts first, then PE(0,1) and PE(1,0) on the next cycle, and so on. This means all tiles in the mesh fire in parallel with each other, so total latency is set by a single tile's pipeline depth, not the number of tiles.
+
+### Processing Element
+
+Each PE is a 4-state FSM: **IDLE → LOAD\_DATA → MAC\_COMPUTE → OUTPUT**, cycling once per input element it receives. It computes:
+
+$$C_{ij} \mathrel{+}= A_{ik} \cdot B_{kj}$$
+
+accumulating over all K steps as the wavefront passes through. With a tile of size T, the wavefront takes approximately `3T − 2` cycles to cross the array end-to-end. The FP32 multiplier and adder are sourced from a sibling `ArithmeticLibrary` and are fully pipelined. Once computation is done, results are drained column-by-column eastward out of the array into the output SRAM.
+
+### Convolution via im2col
+
+Convolution is mapped onto the same matrix multiply by reformatting the input offline — input image patches are flattened into rows of A, and kernels into columns of B:
 
 ```
-     North Inputs (Weights from Matrix B)
-        ↓b00  ↓b01  ↓b02
-       ┌─────┬─────┬─────┐
-  a00→ │PE00 │PE01 │PE02 │ → East Output
-       ├─────┼─────┼─────┤
-  a10→ │PE10 │PE11 │PE12 │ → East Output
-       ├─────┼─────┼─────┤
-  a20→ │PE20 │PE21 │PE22 │ → East Output
-       └─────┴─────┴─────┘
-         ↓     ↓     ↓
-    South Outputs (Data Passthrough)
+A[P×P]  row i  = patch_i.flatten()
+B[P×P]  col j  = kernel_j.flatten()
+C[P×P]  C[i,j] = dot(patch_i, kernel_j)
 ```
 
-## 3. Processing Element (PE) Architecture
+where `P = K²` for a K×K kernel. Multi-output-channel and overlapping-stride variants are handled by extending B with multiple filter columns or splitting patches across batches respectively. The PE array is shared with matmul — there are no architectural differences between the two modes.
 
-### 3.1 PE State Machine
+---
 
-Each PE operates as a 4-state finite state machine:
+## Performance
 
-```
-IDLE ──inputs_valid_i──→ LOAD_DATA ──→ MAC_COMPUTE ──mac_done──→ OUTPUT ──→ IDLE
- ↑                                                                 │
- └─────────────────────────────────────────────────────────────────┘
- ↑
- └──accumulator_valid_i (for result draining)
-```
+All figures measured with Verilator, 10 ns clock, verified against a Float64 NumPy reference (relative tolerance ≤ 1%).
 
-**State Descriptions:**
-- **IDLE**: Waiting for new data or accumulator drain signal
-- **LOAD_DATA**: Capturing north_i (weight) and west_i (data) inputs
-- **MAC_COMPUTE**: Performing multiply-accumulate operation
-- **OUTPUT**: Forwarding data and optionally outputting accumulator result
+### Cycle counts
 
-### 3.2 PE Internal Data Flow
+| Matrix | Tile | Cycles |
+|--------|------|--------|
+| 8×8    | 2×2  | 255    |
+| 8×8    | 4×4  | 561    |
+| 8×8    | 8×8  | 1 221  |
+| 16×16  | 2×2  | 399    |
+| 16×16  | 4×4  | 849    |
+| 16×16  | 8×8  | 1 797  |
+| 16×16  | 16×16| 3 885  |
 
-Each PE contains:
-- **Input Buffers**: `buffered_north`, `buffered_west`
-- **Accumulator Buffer**: `buffered_accumulator`
-- **MAC Unit**: Dedicated multiply-accumulate hardware
-- **Output Mux**: Selects between data passthrough and accumulator output
+Cycle counts are fully deterministic across random seeds — hardware completion time is data-independent.
+
+### Scaling behaviour
+
+**Tile size dominates latency.** Because all tiles fire in parallel, total cycle count is set by one tile's `~3T − 2` wavefront depth. Smaller tiles finish sooner regardless of how many are in the mesh:
 
 ```
-north_i ──┐    ┌─── MAC Unit ─── mac_result ──→ buffered_accumulator
-          ├──→ │                                        │
-         buffer └─ west_i (direct)                      │
-          │                                             ↓
-west_i ───┼────────────────────────────────────→ Output Mux ──→ east_o
-          │                                             ↑
-          └─────────────────────────────────────→ south_o
-                                                select_accumulator_i
+8×8  normalised:   T=2 : T=4 : T=8  →  1.0 : 2.2 : 4.8
+16×16 normalised:  T=2 : T=4 : T=8 : T=16  →  1.0 : 2.1 : 4.5 : 9.7
 ```
 
-## 4. Input Queue Operation
+**Doubling N costs ~1.5× cycles, not 4×.** Although total MAC work grows as O(N³), the tile count grows with it, absorbing most of the added work in parallel. The remaining overhead comes only from the deeper accumulation chain across more depth slices.
 
-### 4.1 Row Input Queue (West Side)
+### Tile size trade-off
 
-The row input queue distributes matrix A data to PE rows with precise timing:
+| | Small tile (e.g. 2×2) | Large tile (e.g. 16×16) |
+|---|---|---|
+| **Latency** | Low ✓ | High ✗ |
+| **Hardware instances** | Many ✗ | Few ✓ |
+| **Routing complexity** | High ✗ | Low ✓ |
+| **Area efficiency** | Poor ✗ | Good ✓ |
 
-**Initial State (t=0):**
-```
-PE Addresses: PE0→0, PE1→3, PE2→6  (base addresses for each row)
-Data Ready:   [a00, -, -], [a10, -, -], [a20, -, -]
-```
+Use the smallest tile your area and routing budget allow for minimum latency; use the largest tile that fits your timing budget to minimise silicon area.
 
-**Data Distribution Sequence:**
-```
-Clock 1: Release first column: a00→PE00, a10→PE10, a20→PE20
-Clock 2: Wait for PE consumption (passthrough_valid feedback)
-Clock 3: Release second column: a01→PE00, a11→PE10, a21→PE20
-...
-```
+> **Note:** 32×32 has not been tested — Verilator's in-memory elaboration of 32³ = 32 768 tile instances exceeds available RAM. VCS or FPGA synthesis would be needed.
 
-**Address Progression:**
-```
-PE0: 0 → 1 → 2  (sequential: a00, a01, a02)
-PE1: 3 → 4 → 5  (sequential: a10, a11, a12)
-PE2: 6 → 7 → 8  (sequential: a20, a21, a22)
-```
+---
 
-### 4.2 Column Input Queue (North Side)
+## Simulation
 
-The column input queue distributes matrix B data to PE columns:
+### Single test
 
-**Address Progression:**
-```
-PE0: 0 → 3 → 6  (column-wise: b00, b10, b20)
-PE1: 1 → 4 → 7  (column-wise: b01, b11, b21)
-PE2: 2 → 5 → 8  (column-wise: b02, b12, b22)
+Generate a stimulus set manually, then compile and simulate:
+
+```bash
+python matmul_tests.py --list                          # see available tests
+python matmul_tests.py --gen mm_random --matrix-size 16
+
+python conv_tests.py --list                            # N must be a perfect square (16, 64, 256 ...)
+python conv_tests.py --gen conv_random --matrix-size 16
+
+make          # Verilator
+make vcs      # VCS
 ```
 
-### 4.3 Passthrough Valid Mechanism
+### Regression
 
-The input queues use a 2-cycle delayed feedback system:
+Stimulus generation, compilation, and simulation are all handled automatically. The testbench is compiled once per tile configuration and the binary is reused across all stimulus sets.
 
-```
-PE generates passthrough_valid_o ──┐
-                                  │ 2-cycle
-                                  │ delay
-                                  ↓
-            Queue advances read_addr ←──┘
+```bash
+make regression MATRIX_SIZE=16
+make regression MATRIX_SIZE=16 REGRESSION_GROUP=matmul   # matmul only
+make regression MATRIX_SIZE=64 FAST=1                    # single tile, faster
 ```
 
-This delay ensures proper timing coordination between data availability and PE consumption.
-
-## 5. Systolic Data Flow Progression
-
-### 5.1 Wave-Front Propagation
-
-Data flows through the array in diagonal wave-fronts. Here's the timing for our 3×3 example:
-
-**Clock Cycle 1:**
-```
-inputs_valid propagation: PE00 gets valid
-PE00: IDLE → LOAD_DATA (captures a00, b00)
-```
-
-**Clock Cycle 2:**
-```
-inputs_valid propagation: PE01, PE10 get valid
-PE00: LOAD_DATA → MAC_COMPUTE (starts a00×b00)
-PE01: IDLE → LOAD_DATA (captures a00, b01)
-PE10: IDLE → LOAD_DATA (captures a10, b00)
-```
-
-**Clock Cycle 3:**
-```
-inputs_valid propagation: PE02, PE11, PE20 get valid
-PE00: MAC_COMPUTE → OUTPUT (completes a00×b00, outputs a00→south, b00→east)
-PE01: LOAD_DATA → MAC_COMPUTE (starts a00×b01)
-PE10: LOAD_DATA → MAC_COMPUTE (starts a10×b00)
-PE02: IDLE → LOAD_DATA (captures a00, b02)
-PE11: IDLE → LOAD_DATA (captures a10, b01)
-PE20: IDLE → LOAD_DATA (captures a20, b00)
-```
-
-### 5.2 Data Accumulation Pattern
-
-Each PE accumulates products over multiple cycles:
-
-**PE00 Computation Sequence:**
-```
-Cycle 1: acc = 0 + (a00 × b00)
-Cycle 4: acc = (a00×b00) + (a01 × b10)
-Cycle 7: acc = (a00×b00) + (a01×b10) + (a02 × b20) = Final Result C00
-```
-
-**PE11 Computation Sequence:**
-```
-Cycle 5: acc = 0 + (a10 × b01)
-Cycle 8: acc = (a10×b01) + (a11 × b11)
-Cycle 11: acc = (a10×b01) + (a11×b11) + (a12 × b21) = Final Result C11
-```
-
-## 6. Result Collection and Wave Control
-
-### 6.1 Matrix Multiplication Completion Detection
-
-The completion detection logic in the Mesh module monitors PE22 (bottom-right):
-
-1. **Last Element Detection**: When `last_element_i` pulse reaches PE22 via horizontal propagation
-2. **Processing Completion**: When PE22 generates `passthrough_valid_o` after processing its final element
-3. **Done Signal**: Combination of both conditions generates `done_o`
-
-### 6.2 Wave-Based Result Collection
-
-Upon `done_o`, the wave control system initiates result collection:
-
-**Wave Control State:**
-```
-start_wave = done_o & ~matrix_mult_done_ff  (edge detection)
-
-Initial: col_shift = 3'b100, wave_active = 1
-Clock 1: col_shift = 3'b010
-Clock 2: col_shift = 3'b001
-Clock 3: col_shift = 3'b000, wave_active = 0
-```
-
-**PE Selection for Each Wave:**
-```
-Wave 1 (col_shift[2]): PE02, PE12, PE22 → select_accumulator_i = 1
-Wave 2 (col_shift[1]): PE01, PE11, PE21 → select_accumulator_i = 1
-Wave 3 (col_shift[0]): PE00, PE10, PE20 → select_accumulator_i = 1
-```
-
-### 6.3 Result Output Sequence
-
-**Wave 1 Output (Column 2):**
-```
-PE02 → east_o = C02 (accumulated result)
-PE12 → east_o = C12 (accumulated result)
-PE22 → east_o = C22 (accumulated result)
-```
-
-**Wave 2 Output (Column 1):**
-```
-PE01 → east_o = C01 (accumulated result)
-PE11 → east_o = C11 (accumulated result)
-PE21 → east_o = C21 (accumulated result)
-```
-
-**Wave 3 Output (Column 0):**
-```
-PE00 → east_o = C00 (accumulated result)
-PE10 → east_o = C10 (accumulated result)
-PE20 → east_o = C20 (accumulated result)
-```
-
-## 7. Accumulator Draining Mechanism
-
-### 7.1 PE Drain State Transition
-
-When `select_accumulator_i` is asserted for a PE in IDLE state:
-
-```
-IDLE state with select_accumulator_gated:
-- east_o ← buffered_accumulator (output accumulated result)
-- accumulator_valid_o ← 1 (signal valid accumulator output)
-```
-
-### 7.2 Drain Signal Propagation
-
-The `accumulator_valid_o` signals propagate eastward:
-
-```
-PE02 accumulator_valid_o → PE01 accumulator_valid_i → PE00 accumulator_valid_i
-PE12 accumulator_valid_o → PE11 accumulator_valid_i → PE10 accumulator_valid_i
-PE22 accumulator_valid_o → PE21 accumulator_valid_i → PE20 accumulator_valid_i
-```
-
-When a PE receives `accumulator_valid_i` in IDLE state:
-- Transitions directly to OUTPUT state
-- Sets `accumulator_drain_flag = 1`
-- Outputs `west_i` directly to `east_o` (passthrough mode)
-- Generates `accumulator_valid_o = 1`
-
-## 8. Output Collection System
-
-### 8.1 Data Capture from East Boundary
-
-The OutputSram module captures data from the rightmost column of PEs:
-
-```
-east_o[0] from PE02 → Result Memory
-east_o[1] from PE12 → Result Memory
-east_o[2] from PE22 → Result Memory
-```
-
-### 8.2 Collection Timing
-
-Results are collected over 3 clock cycles corresponding to the wave progression:
-
-```
-Cycle 1: Collect C02, C12, C22
-Cycle 2: Collect C01, C11, C21
-Cycle 3: Collect C00, C10, C20
-```
-
-**Final Result Matrix Layout in Memory:**
-```
-Address 0: C02    Address 3: C01    Address 6: C00
-Address 1: C12    Address 4: C11    Address 7: C10
-Address 2: C22    Address 5: C21    Address 8: C20
-```
-
-## 9. Control Flow Summary
-
-### 9.1 Complete Operation Sequence
-
-1. **Initialization**: Load matrices into input queues
-2. **Start Signal**: Assert `start_matrix_mult_i`
-3. **Data Distribution**: Input queues begin feeding PEs based on passthrough_valid feedback
-4. **Computation Phase**: PEs perform MAC operations in systolic fashion
-5. **Completion Detection**: Monitor bottom-right PE for processing completion
-6. **Wave Generation**: Initiate column-wise result collection
-7. **Result Draining**: Collect accumulated results from each column
-8. **Storage**: Store results in output memory for external access
-
-### 9.2 Pipeline Characteristics
-
-- **Latency**: ~9 clock cycles for 3×3 multiplication (3N cycles generally)
-- **Throughput**: Results collected at 1 per clock cycle during collection phase
-- **Overlapping**: Input distribution, computation, and result collection can overlap for back-to-back operations
-
-## 10. Key Design Features
-
-### 10.1 Flow Control
-- Backpressure mechanism through passthrough_valid signals
-- Prevents data corruption by ensuring proper PE readiness
-- Maintains systolic timing relationships
-
-### 10.2 Result Integrity
-- Accumulator buffering prevents result corruption during collection
-- Wave-based collection ensures all results are captured
-- Last element tracking ensures computation completion
-
-### 10.3 Scalability
-- Parameterizable design supports arbitrary N×N dimensions
-- Memory addressing scales automatically with array size
-- Control logic adapts to different configurations
-
-This architecture provides an efficient, pipelined solution for matrix multiplication with careful attention to timing, data flow, and result collection mechanisms.
+Pass criterion: relative error ≤ 1% per element against a Float64 reference. Results are written to `testbenches/results/readiness/readiness_report.md`.
