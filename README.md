@@ -1,4 +1,4 @@
-# SystolicMesh IP
+# SystolicMesh
 
 A parameterised, tile-scalable systolic-array matrix-multiplication engine in SystemVerilog, computing **C = A × B** over IEEE-754 Float32.
 
@@ -27,6 +27,9 @@ Each PE is a 4-state FSM: **IDLE → LOAD\_DATA → MAC\_COMPUTE → OUTPUT**, c
 $$C_{ij} \mathrel{+}= A_{ik} \cdot B_{kj}$$
 
 accumulating over all K steps as the wavefront passes through. With a tile of size T, the wavefront takes approximately `3T − 2` cycles to cross the array end-to-end. The FP32 multiplier and adder are sourced from a sibling `ArithmeticLibrary` and are fully pipelined. Once computation is done, results are drained column-by-column eastward out of the array into the output SRAM.
+
+> [!NOTE]
+> The array's numeric precision is determined entirely by the adder and multiplier modules sourced from `ArithmeticLibrary`. Swapping them out for alternative implementations (e.g. BFloat16, FP16, or integer) is sufficient to change the precision of the entire design — no other architectural changes are required. The `DATA_WIDTH` parameter must also be updated to match the bit-width of the new format (e.g. `DATA_WIDTH = 16` for FP16 or BFloat16).
 
 ### Convolution via im2col
 
