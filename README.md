@@ -77,12 +77,6 @@ Cycle counts are fully deterministic across random seeds — hardware completion
 |---|---|---|
 | **Latency** | Low ✓ | High ✗ |
 | **Hardware instances** | Many ✗ | Few ✓ |
-| **Routing complexity** | High ✗ | Low ✓ |
-| **Area efficiency** | Poor ✗ | Good ✓ |
-
-Use the smallest tile your area and routing budget allow for minimum latency; use the largest tile that fits your timing budget to minimise silicon area.
-
-> **Note:** 32×32 has not been tested — Verilator's in-memory elaboration of 32³ = 32 768 tile instances exceeds available RAM. VCS or FPGA synthesis would be needed.
 
 ---
 
